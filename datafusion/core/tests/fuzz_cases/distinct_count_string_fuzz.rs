@@ -23,9 +23,9 @@ use arrow::record_batch::RecordBatch;
 use arrow_array::{Array, OffsetSizeTrait};
 
 use arrow_array::cast::AsArray;
+use datafusion_common_runtime::JoinSet;
 use datafusion::datasource::MemTable;
 use std::collections::HashSet;
-use tokio::task::JoinSet;
 
 use datafusion::prelude::{SessionConfig, SessionContext};
 use test_utils::StringBatchGenerator;

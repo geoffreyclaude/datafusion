@@ -28,6 +28,7 @@ use arrow_schema::{
     DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
 };
 use datafusion::common::Result;
+use datafusion_common_runtime::JoinSet;
 use datafusion::datasource::MemTable;
 use datafusion::physical_expr::aggregate::AggregateExprBuilder;
 use datafusion::physical_plan::aggregates::{
@@ -51,7 +52,6 @@ use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use rand::rngs::StdRng;
 use rand::{thread_rng, Rng, SeedableRng};
 use std::str;
-use tokio::task::JoinSet;
 
 // ========================================================================
 //  The new aggregation fuzz tests based on [`AggregationFuzzer`]

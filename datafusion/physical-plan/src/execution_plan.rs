@@ -47,12 +47,12 @@ use arrow::record_batch::RecordBatch;
 use arrow_array::Array;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{exec_err, Constraints, Result};
+use datafusion_common_runtime::JoinSet;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 
 use futures::stream::{StreamExt, TryStreamExt};
-use tokio::task::JoinSet;
 
 /// Represent nodes in the DataFusion Physical Plan.
 ///
