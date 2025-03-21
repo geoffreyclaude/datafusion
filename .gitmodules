@@ -8,3 +8,6 @@
 	path = datafusion-testing
 	url = https://github.com/apache/datafusion-testing.git
 	branch = main
+[submodule "datafusion/substrait/substrait-java"]
+	path = datafusion/sqllogictest/substrait-java
+	url = https://github.com/substrait-io/substrait-java
