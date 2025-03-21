@@ -19,7 +19,11 @@
 mod error;
 mod normalize;
 mod runner;
+mod substrait;
+mod ddl_generator;
+mod sql_helper;
 
 pub use error::*;
 pub use normalize::*;
 pub use runner::*;
+pub use substrait::init_isthmus;

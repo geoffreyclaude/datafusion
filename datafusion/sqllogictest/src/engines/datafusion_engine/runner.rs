@@ -15,35 +15,41 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
 use std::{path::PathBuf, time::Duration};
-
+use std::sync::Arc;
 use super::{error::Result, normalize, DFSqlLogicTestError};
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use datafusion::physical_plan::common::collect;
-use datafusion::physical_plan::execute_stream;
+use datafusion::physical_plan::{execute_stream, ExecutionPlan};
 use datafusion::prelude::SessionContext;
 use indicatif::ProgressBar;
 use log::Level::{Debug, Info};
 use log::{debug, log_enabled, warn};
 use sqllogictest::DBOutput;
 use tokio::time::Instant;
-
+use datafusion_substrait::logical_plan::consumer::from_substrait_plan;
+use crate::engines::datafusion_engine::ddl_generator::generate_all_table_ddls;
+use crate::engines::datafusion_engine::sql_helper::sanitize_sql_idents;
+use crate::engines::datafusion_engine::substrait::to_substrait;
 use crate::engines::output::{DFColumnType, DFOutput};
 
 pub struct DataFusion {
     ctx: SessionContext,
     relative_path: PathBuf,
     pb: ProgressBar,
+    use_substrait: bool,
 }
 
+const SUBSTRAIT_IGNORED_PREFIXES: &[&str] = &["copy", "create", "describe", "drop", "explain", "insert", "set", "show"];
+
 impl DataFusion {
-    pub fn new(ctx: SessionContext, relative_path: PathBuf, pb: ProgressBar) -> Self {
+    pub fn new(ctx: SessionContext, relative_path: PathBuf, pb: ProgressBar, use_substrait: bool) -> Self {
         Self {
             ctx,
             relative_path,
             pb,
+            use_substrait,
         }
     }
 
@@ -62,6 +68,49 @@ impl DataFusion {
         self.pb
             .set_message(format!("{} - {} took > 500 ms", split[0], current_count));
     }
+
+    async fn build_execution_plan_from_sql(&self, sql: &str) -> Result<Arc<dyn ExecutionPlan>> {
+        let logical_plan = self.ctx.sql(sql).await?;
+        logical_plan.create_physical_plan().await.map_err(DFSqlLogicTestError::DataFusion)
+    }
+
+    async fn build_execution_plan(&mut self, sql: &str) -> Result<Arc<dyn ExecutionPlan>> {
+
+        if !self.use_substrait {
+            return self.build_execution_plan_from_sql(sql).await;
+        }
+
+        if SUBSTRAIT_IGNORED_PREFIXES.iter().any(|p| sql.to_lowercase().starts_with(p)) {
+            self.build_execution_plan_from_sql(sql).await
+        } else {
+            let ddls = generate_all_table_ddls(&self.ctx).await?;
+            let sql = sanitize_sql_idents(&sql)?;
+            let substrait_plan = to_substrait(ddls.as_slice(), &sql)?;
+            let session_state = &self.ctx.state();
+
+            let logical_plan = from_substrait_plan(session_state, &substrait_plan).await?;
+            let logical_plan = session_state.optimize(&logical_plan)?;
+
+            session_state.create_physical_plan(&logical_plan).await.map_err(DFSqlLogicTestError::DataFusion)
+        }
+    }
+
+    async fn run_query(&mut self, sql: &str) -> Result<DFOutput> {
+
+        let plan = self.build_execution_plan(sql).await?;
+
+        let task_ctx = self.ctx.state().task_ctx();
+        let stream = execute_stream(plan, task_ctx)?;
+        let types = normalize::convert_schema_to_types(stream.schema().fields());
+        let results: Vec<RecordBatch> = collect(stream).await?;
+        let rows = normalize::convert_batches(results)?;
+
+        if rows.is_empty() && types.is_empty() {
+            Ok(DBOutput::StatementComplete(0))
+        } else {
+            Ok(DBOutput::Rows { types, rows })
+        }
+    }
 }
 
 #[async_trait]
@@ -79,7 +128,7 @@ impl sqllogictest::AsyncDB for DataFusion {
         }
 
         let start = Instant::now();
-        let result = run_query(&self.ctx, sql).await;
+        let result = self.run_query(sql).await;
         let duration = start.elapsed();
 
         if duration.gt(&Duration::from_millis(500)) {
@@ -113,21 +162,4 @@ impl sqllogictest::AsyncDB for DataFusion {
     }
 
     async fn shutdown(&mut self) {}
-}
-
-async fn run_query(ctx: &SessionContext, sql: impl Into<String>) -> Result<DFOutput> {
-    let df = ctx.sql(sql.into().as_str()).await?;
-    let task_ctx = Arc::new(df.task_ctx());
-    let plan = df.create_physical_plan().await?;
-
-    let stream = execute_stream(plan, task_ctx)?;
-    let types = normalize::convert_schema_to_types(stream.schema().fields());
-    let results: Vec<RecordBatch> = collect(stream).await?;
-    let rows = normalize::convert_batches(results)?;
-
-    if rows.is_empty() && types.is_empty() {
-        Ok(DBOutput::StatementComplete(0))
-    } else {
-        Ok(DBOutput::Rows { types, rows })
-    }
 }

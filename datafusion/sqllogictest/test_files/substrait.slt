@@ -1,0 +1,7 @@
+query error
+(SELECT id, NULL::string as name, l_name FROM "table_with_metadata")
+  UNION
+(SELECT id, name, NULL::string as l_name FROM "table_with_metadata")
+ORDER BY id, name, l_name;
+----
+DataFusion error: Substrait error: Field 'ts' in Substrait schema has a different type (Timestamp(Second, None)) than the corresponding field in the table schema (Timestamp(Nanosecond, None)).

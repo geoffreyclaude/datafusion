@@ -19,10 +19,7 @@ use clap::Parser;
 use datafusion::common::instant::Instant;
 use datafusion::common::utils::get_available_parallelism;
 use datafusion::common::{exec_err, DataFusionError, Result};
-use datafusion_sqllogictest::{
-    df_value_validator, read_dir_recursive, setup_scratch_dir, value_normalizer,
-    DataFusion, TestContext,
-};
+use datafusion_sqllogictest::{df_value_validator, init_isthmus, read_dir_recursive, setup_scratch_dir, value_normalizer, DataFusion, TestContext};
 use futures::stream::StreamExt;
 use indicatif::{
     HumanDuration, MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle,
@@ -102,6 +99,12 @@ async fn run_tests() -> Result<()> {
         return Ok(());
     }
     options.warn_on_ignored();
+    
+    if options.use_substrait {
+        init_isthmus().map_err(
+            |e| DataFusionError::Execution(format!("Failed to initialize Isthmus: {e}"))
+        )?;
+    }
 
     #[cfg(feature = "postgres")]
     initialize_postgres_container(&options).await?;
@@ -215,6 +218,7 @@ async fn run_test_file(
     let TestFile {
         path,
         relative_path,
+        use_substrait,
     } = test_file;
     let Some(test_ctx) = TestContext::try_new_for_test_file(&relative_path).await else {
         info!("Skipping: {}", path.display());
@@ -233,6 +237,7 @@ async fn run_test_file(
             test_ctx.session_ctx().clone(),
             relative_path.clone(),
             pb.clone(),
+            use_substrait,
         ))
     });
     runner.add_label("Datafusion");
@@ -297,6 +302,7 @@ async fn run_test_file_with_postgres(
     let TestFile {
         path,
         relative_path,
+        use_substrait,
     } = test_file;
     setup_scratch_dir(&relative_path)?;
 
@@ -343,6 +349,7 @@ async fn run_complete_file(
     let TestFile {
         path,
         relative_path,
+        use_substrait,
     } = test_file;
 
     info!("Using complete mode to complete: {}", path.display());
@@ -364,6 +371,7 @@ async fn run_complete_file(
             test_ctx.session_ctx().clone(),
             relative_path.clone(),
             pb.clone(),
+            use_substrait,
         ))
     });
 
@@ -398,6 +406,7 @@ async fn run_complete_file_with_postgres(
     let TestFile {
         path,
         relative_path,
+        use_substrait,
     } = test_file;
     info!(
         "Using complete mode to complete with Postgres runner: {}",
@@ -457,10 +466,11 @@ struct TestFile {
     pub path: PathBuf,
     /// The relative path of the file (used for display)
     pub relative_path: PathBuf,
+    pub use_substrait: bool,
 }
 
 impl TestFile {
-    fn new(path: PathBuf) -> Self {
+    fn new(path: PathBuf, use_substrait: bool) -> Self {
         let p = path.to_string_lossy();
         let relative_path = PathBuf::from(if p.starts_with(TEST_DIRECTORY) {
             p.strip_prefix(TEST_DIRECTORY).unwrap()
@@ -473,6 +483,7 @@ impl TestFile {
         Self {
             path,
             relative_path,
+            use_substrait,
         }
     }
 
@@ -500,7 +511,7 @@ impl TestFile {
 fn read_test_files(options: &Options) -> Result<Vec<TestFile>> {
     let mut paths = read_dir_recursive(TEST_DIRECTORY)?
         .into_iter()
-        .map(TestFile::new)
+        .map(|path| TestFile::new(path, options.use_substrait))
         .filter(|f| options.check_test_file(&f.path))
         .filter(|f| f.is_slt_file())
         .filter(|f| f.check_tpch(options))
@@ -510,7 +521,7 @@ fn read_test_files(options: &Options) -> Result<Vec<TestFile>> {
     if options.include_sqlite {
         let mut sqlite_paths = read_dir_recursive(DATAFUSION_TESTING_TEST_DIRECTORY)?
             .into_iter()
-            .map(TestFile::new)
+            .map(|path| TestFile::new(path, options.use_substrait))
             .filter(|f| options.check_test_file(&f.path))
             .filter(|f| f.is_slt_file())
             .filter(|f| f.check_sqlite(options))
@@ -547,6 +558,9 @@ struct Options {
 
     #[clap(long, env = "INCLUDE_TPCH", help = "Include tpch files")]
     include_tpch: bool,
+
+    #[clap(long, help = "Use substrait to generate logical plans")]
+    use_substrait: bool,
 
     #[clap(action, help = "test filter (substring match on filenames)")]
     filters: Vec<String>,

@@ -40,10 +40,11 @@ name = "datafusion_sqllogictest"
 arrow = { workspace = true }
 async-trait = { workspace = true }
 bigdecimal = { workspace = true }
-bytes = { workspace = true, optional = true }
+bytes = { workspace = true }
 chrono = { workspace = true, optional = true }
 clap = { version = "4.5.34", features = ["derive", "env"] }
 datafusion = { workspace = true, default-features = true, features = ["avro"] }
+datafusion-substrait = {workspace = true}
 futures = { workspace = true }
 half = { workspace = true, default-features = true }
 indicatif = "0.17"
@@ -63,12 +64,14 @@ testcontainers-modules = { version = "0.11", features = ["postgres"], optional =
 thiserror = "2.0.12"
 tokio = { workspace = true }
 tokio-postgres = { version = "0.7.12", optional = true }
+prost = "0.13.5"
+duckdb = {  version = "=1.1.1", features = ["bundled", "buildtime_bindgen", "loadable-extension"] }
+libduckdb-sys = {version = "=1.1.1"}
 
 [features]
 avro = ["datafusion/avro"]
 backtrace = ["datafusion/backtrace"]
 postgres = [
-    "bytes",
     "chrono",
     "postgres-types",
     "postgres-protocol",
