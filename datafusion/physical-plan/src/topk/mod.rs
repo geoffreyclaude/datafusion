@@ -83,23 +83,31 @@ pub struct TopK {
     /// The target number of rows for output batches
     batch_size: usize,
     /// sort expressions
-    expr: Arc<[PhysicalSortExpr]>,
+    output_ordering: Arc<[PhysicalSortExpr]>,
     /// row converter, for sort keys
     row_converter: RowConverter,
     /// scratch space for converting rows
     scratch_rows: Rows,
     /// stores the top k values and their sort key values, in order
     heap: TopKHeap,
+    /// row converter, for common keys between the sort keys and the input ordering
+    prefix_row_converter: Option<RowConverter>,
+    /// guaranteed ordering of input batches to allow early exit optimization
+    input_ordering: Arc<[PhysicalSortExpr]>,
+    /// If true, indicates that all rows of subsequent batches are guaranteed to be worse than the top K
+    pub(crate) finished: bool,
 }
 
 impl TopK {
     /// Create a new [`TopK`] that stores the top `k` values, as
     /// defined by the sort expressions in `expr`.
     // TODO: make a builder or some other nicer API
+    #[allow(clippy::too_many_arguments)]
     pub fn try_new(
         partition_id: usize,
         schema: SchemaRef,
-        expr: LexOrdering,
+        input_ordering: LexOrdering,
+        output_ordering: LexOrdering,
         k: usize,
         batch_size: usize,
         runtime: Arc<RuntimeEnv>,
@@ -108,9 +116,21 @@ impl TopK {
         let reservation = MemoryConsumer::new(format!("TopK[{partition_id}]"))
             .register(&runtime.memory_pool);
 
-        let expr: Arc<[PhysicalSortExpr]> = expr.into();
+        let output_ordering: Arc<[PhysicalSortExpr]> = output_ordering.into();
 
-        let sort_fields: Vec<_> = expr
+        let output_sort_fields: Vec<_> = output_ordering
+            .iter()
+            .map(|e| {
+                Ok(SortField::new_with_options(
+                    e.expr.data_type(&schema)?,
+                    e.options,
+                ))
+            })
+            .collect::<Result<_>>()?;
+
+        let input_ordering: Arc<[PhysicalSortExpr]> = input_ordering.into();
+
+        let input_sort_fields: Vec<_> = input_ordering
             .iter()
             .map(|e| {
                 Ok(SortField::new_with_options(
@@ -122,21 +142,30 @@ impl TopK {
 
         // TODO there is potential to add special cases for single column sort fields
         // to improve performance
-        let row_converter = RowConverter::new(sort_fields)?;
+        let row_converter = RowConverter::new(output_sort_fields)?;
         let scratch_rows = row_converter.empty_rows(
             batch_size,
             20 * batch_size, // guesstimate 20 bytes per row
         );
+
+        let prefix_row_converter = if input_ordering.is_empty() {
+            None
+        } else {
+            Some(RowConverter::new(input_sort_fields)?)
+        };
 
         Ok(Self {
             schema: Arc::clone(&schema),
             metrics: TopKMetrics::new(metrics, partition_id),
             reservation,
             batch_size,
-            expr,
+            output_ordering,
             row_converter,
             scratch_rows,
             heap: TopKHeap::new(k, batch_size, schema),
+            prefix_row_converter,
+            input_ordering,
+            finished: false,
         })
     }
 
@@ -147,7 +176,7 @@ impl TopK {
         let _timer = self.metrics.baseline.elapsed_compute().timer();
 
         let sort_keys: Vec<ArrayRef> = self
-            .expr
+            .output_ordering
             .iter()
             .map(|expr| {
                 let value = expr.expr.evaluate(&batch)?;
@@ -163,7 +192,7 @@ impl TopK {
         // TODO make this algorithmically better?:
         // Idea: filter out rows >= self.heap.max() early (before passing to `RowConverter`)
         //       this avoids some work and also might be better vectorizable.
-        let mut batch_entry = self.heap.register_batch(batch);
+        let mut batch_entry = self.heap.register_batch(batch.clone());
         for (index, row) in rows.iter().enumerate() {
             match self.heap.max() {
                 // heap has k items, and the new row is greater than the
@@ -183,6 +212,65 @@ impl TopK {
 
         // update memory reservation
         self.reservation.try_resize(self.size())?;
+
+        // Only evaluate the prefix columns for a *single* row in both the batch
+        // (the "last" row) and the "worst" row in the heap
+        if !self.input_ordering.is_empty()
+            && self.heap.k > 0
+            && self.heap.inner.len() >= self.heap.k
+            && batch.num_rows() > 0
+        {
+            let prefix_converter = self.prefix_row_converter.as_mut().unwrap();
+
+            // 1) Evaluate the prefix expressions for *only* the last row of the batch
+            let last_index = batch.num_rows() - 1;
+            let single_row_arrays_for_last: Vec<ArrayRef> = self
+                .input_ordering
+                .iter()
+                .map(|expr| {
+                    // Evaluate the single row at `last_index`
+                    expr.expr
+                        .evaluate(&batch.slice(last_index, 1))?
+                        .into_array(1)
+                })
+                .collect::<Result<_>>()?;
+
+            // Append to `prefix_row`, which now has data for exactly 1 row
+            let mut prefix_row = prefix_converter.empty_rows(1, 20);
+            prefix_converter.append(&mut prefix_row, &single_row_arrays_for_last)?;
+
+            // Extract that single Row from our `prefix_scratch_row`
+            let last_prefix = prefix_row.row(0);
+
+            // 2) Evaluate the prefix expressions for the "worst" row in the heap
+            let worst_topk = self.heap.max().unwrap();
+            let store_entry = self.heap.store.get(worst_topk.batch_id).unwrap();
+            let batch_worst = &store_entry.batch;
+
+            let worst_index = worst_topk.index;
+
+            let single_row_arrays_for_worst: Vec<ArrayRef> = self
+                .input_ordering
+                .iter()
+                .map(|expr| {
+                    // Evaluate the single row at `worst_index`
+                    expr.expr
+                        .evaluate(&batch_worst.slice(worst_index, 1))?
+                        .into_array(1)
+                })
+                .collect::<Result<_>>()?;
+
+            let mut worst_scratch_row = prefix_converter.empty_rows(1, 20);
+            prefix_converter
+                .append(&mut worst_scratch_row, &single_row_arrays_for_worst)?;
+            let worst_prefix = worst_scratch_row.row(0);
+
+            // 3) If last row prefix is strictly greater => we can mark finished
+            if last_prefix.as_ref() > worst_prefix.as_ref() {
+                self.finished = true;
+            }
+        }
+
         Ok(())
     }
 
@@ -193,10 +281,13 @@ impl TopK {
             metrics,
             reservation: _,
             batch_size,
-            expr: _,
+            output_ordering: _,
             row_converter: _,
             scratch_rows: _,
             mut heap,
+            prefix_row_converter: _,
+            input_ordering: _,
+            finished: _,
         } = self;
         let _timer = metrics.baseline.elapsed_compute().timer(); // time updated on drop
 

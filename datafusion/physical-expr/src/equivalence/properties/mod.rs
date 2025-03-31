@@ -581,6 +581,59 @@ impl EquivalenceProperties {
         true
     }
 
+    /// Determines the longest prefix of `reqs` that is satisfied by the
+    /// existing ordering. Returns that prefix as a new `LexRequirement`.
+    ///
+    /// For example, if `reqs = [a ASC, b ASC, c ASC]` and the plan properties
+    /// only satisfy `[a ASC, b ASC]` but not `c ASC`, then this function will
+    /// return `[a ASC, b ASC]`. If no entries are satisfied, it returns an
+    /// empty `LexRequirement`.
+    ///
+    /// Internally, this proceeds in lexicographic order. For each requirement
+    /// `reqs[i]`, we check:
+    /// 1. Does the current plan ordering satisfy `reqs[i]` given what was
+    ///    already satisfied on the left? (if yes, add `reqs[i]` to the prefix
+    ///    and mark that expression as a “constant” for future comparisons)
+    /// 2. Otherwise, stop.
+    ///
+    /// If the plan happens to satisfy all of `reqs`, you get back `reqs.clone()`.
+    pub fn longest_satisfied_prefix(&self, reqs: &LexRequirement) -> LexRequirement {
+        let mut eq_properties = self.clone();
+        // First, standardize the given requirement:
+        let normalized_reqs = eq_properties.normalize_sort_requirements(reqs);
+
+        // Check whether given ordering is satisfied by constraints first
+        if self.satisfied_by_constraints(&normalized_reqs) {
+            return normalized_reqs;
+        }
+
+        // This will hold the longest prefix that is satisfied so far
+        let mut satisfied_prefix = Vec::new();
+
+        for normalized_req in normalized_reqs {
+            // Check whether given ordering is satisfied
+            if !eq_properties.ordering_satisfy_single(&normalized_req) {
+                break;
+            }
+            satisfied_prefix.push(normalized_req.clone());
+            // Treat satisfied keys as constants in subsequent iterations. We
+            // can do this because the "next" key only matters in a lexicographical
+            // ordering when the keys to its left have the same values.
+            //
+            // Note that these expressions are not properly "constants". This is just
+            // an implementation strategy confined to this function.
+            //
+            // For example, assume that the requirement is `[a ASC, (b + c) ASC]`,
+            // and existing equivalent orderings are `[a ASC, b ASC]` and `[c ASC]`.
+            // From the analysis above, we know that `[a ASC]` is satisfied. Then,
+            // we add column `a` as constant to the algorithm state. This enables us
+            // to deduce that `(b + c) ASC` is satisfied, given `a` is constant.
+            eq_properties = eq_properties
+                .with_constants(std::iter::once(ConstExpr::from(normalized_req.expr)));
+        }
+        LexRequirement::new(satisfied_prefix)
+    }
+
     /// Checks if the sort requirements are satisfied by any of the table constraints (primary key or unique).
     /// Returns true if any constraint fully satisfies the requirements.
     fn satisfied_by_constraints(
