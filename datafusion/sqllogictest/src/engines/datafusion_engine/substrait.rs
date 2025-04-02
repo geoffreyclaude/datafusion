@@ -82,13 +82,6 @@ fn duckdb_config() -> duckdb::Result<Config> {
 /// returning the binary protobuf output as a Vec<u8>.
 pub(crate) fn to_substrait(preparation_statements: &[String], sql: &str) -> Result<Plan> {
 
-    Connection::open_in_memory().map_err(
-        |e| {
-            info!("DuckDB ERROR: {}", e);
-            DFSqlLogicTestError::Other(format!("Failed to open DuckDB connection: {}", e))
-        }
-    )?;
-
     let config = duckdb_config().map_err(
         |e| DFSqlLogicTestError::Other(format!("Failed to create DuckDB config: {}", e))
     )?;
@@ -121,16 +114,28 @@ pub(crate) fn to_substrait(preparation_statements: &[String], sql: &str) -> Resu
         }
     )?;
     info!("Loaded substrait extension");
-    let substrait_call = format!("CALL get_substrait_json('{}')", sql);
-    let substrait_json: String = conn.query_row(substrait_call.as_str(), [], |r| r.get(0)).map_err(
+    let substrait_json_call = format!("CALL get_substrait_json('{}')", sql);
+    let substrait_json: String = conn.query_row(substrait_json_call.as_str(), [], |r| r.get(0)).map_err(
         |e| {
             info!("Substrait ERROR: {}", e);
             DFSqlLogicTestError::Other(format!("Failed to get Substrait JSON: {}", e))
         }
     )?;
-
     info!("Substrait JSON: {}", substrait_json);
 
+    let substrait_call = format!("CALL get_substrait('{}')", sql);
+    let substrait_proto: Vec<u8> = conn.query_row(substrait_call.as_str(), [], |r| r.get(0)).map_err(
+        |e| {
+            info!("Substrait ERROR: {}", e);
+            DFSqlLogicTestError::Other(format!("Failed to get Substrait Proto: {}", e))
+        }
+    )?;
+
+    Plan::decode(Bytes::from(substrait_proto)).map_err(
+        |e| DFSqlLogicTestError::Other(format!("Failed to decode Substrait plan: {}", e)),
+    )
+
+    /*
     let package_root = get_package_root()?;
     let isthmus_exe = package_root
         .join("substrait-java")
@@ -163,5 +168,6 @@ pub(crate) fn to_substrait(preparation_statements: &[String], sql: &str) -> Resu
         Err(DFSqlLogicTestError::Other(
             format!("Isthmus CLI failed: {}", String::from_utf8_lossy(&output.stderr))
         ))
-    }
+    }*/
+
 }

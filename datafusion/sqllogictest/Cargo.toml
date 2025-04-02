@@ -65,8 +65,7 @@ thiserror = "2.0.12"
 tokio = { workspace = true }
 tokio-postgres = { version = "0.7.12", optional = true }
 prost = "0.13.5"
-duckdb = {  version = "=1.1.1", features = ["bundled", "buildtime_bindgen", "loadable-extension"] }
-libduckdb-sys = {version = "=1.1.1"}
+duckdb = {  version = "1.2" }
 
 [features]
 avro = ["datafusion/avro"]

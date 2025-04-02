@@ -100,11 +100,11 @@ async fn run_tests() -> Result<()> {
     }
     options.warn_on_ignored();
     
-    if options.use_substrait {
-        init_isthmus().map_err(
-            |e| DataFusionError::Execution(format!("Failed to initialize Isthmus: {e}"))
-        )?;
-    }
+    // if options.use_substrait {
+    //     init_isthmus().map_err(
+    //         |e| DataFusionError::Execution(format!("Failed to initialize Isthmus: {e}"))
+    //     )?;
+    // }
 
     #[cfg(feature = "postgres")]
     initialize_postgres_container(&options).await?;

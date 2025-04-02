@@ -84,7 +84,7 @@ impl DataFusion {
             self.build_execution_plan_from_sql(sql).await
         } else {
             let ddls = generate_all_table_ddls(&self.ctx).await?;
-            let sql = sanitize_sql_idents(&sql)?;
+            //let sql = sanitize_sql_idents(&sql)?;
             let substrait_plan = to_substrait(ddls.as_slice(), &sql)?;
             let session_state = &self.ctx.state();
 

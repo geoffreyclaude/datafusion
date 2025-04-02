@@ -1,4 +1,4 @@
-use sqlparser::ast::{CastKind, DataType, Expr, Ident, ObjectName, Query, SelectItem, SetExpr, TableFactor, VisitMut, VisitorMut, CharacterLength};
+use sqlparser::ast::{CastKind, DataType, Expr, Ident, ObjectName, Query, SelectItem, SetExpr, TableFactor, VisitMut, VisitorMut, CharacterLength, ObjectNamePart};
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
 use std::ops::ControlFlow;
@@ -41,25 +41,27 @@ impl VisitorMut for IdentifierQuoter {
         match expr {
             Expr::Identifier(ident) => quote_and_lowercase_ident(ident),
             Expr::CompoundIdentifier(idents) => idents.iter_mut().for_each(quote_and_lowercase_ident),
-            Expr::CompositeAccess { key, .. } => quote_and_lowercase_ident(key),
             Expr::Named { name, .. } => quote_and_lowercase_ident(name),
             Expr::MatchAgainst { columns, .. } => columns.iter_mut().for_each(quote_and_lowercase_ident),
-            Expr::Function(function) => {function.name.0.iter_mut().for_each(quote_and_lowercase_ident)},
+            Expr::Function(function) => {function.name.0.iter_mut().for_each(|onp| {
+                let mut ident = onp.as_ident().unwrap().clone();
+                quote_and_lowercase_ident(&mut ident);
+                *onp = ObjectNamePart::Identifier(ident);
+            })},
             Expr::Array(array) => array.named = true,
             Expr::Cast{kind, data_type, ..} => {
                 if kind == &CastKind::DoubleColon {
                     *kind = CastKind::Cast;
                 }
                 *data_type = match &data_type {
-                    DataType::UnsignedTinyInt(val) => DataType::TinyInt(*val),
-                    DataType::UnsignedBigInt(val) => DataType::BigInt(*val),
-                    DataType::UnsignedSmallInt(val) => DataType::SmallInt(*val),
-                    DataType::UnsignedInt(val) => DataType::Int(*val),
-                    DataType::UnsignedInteger(val) => DataType::Integer(*val),
-                    DataType::UnsignedMediumInt(val) => DataType::MediumInt(*val),
-                    DataType::UnsignedInt2(val) => DataType::Int2(*val),
-                    DataType::UnsignedInt4(val) => DataType::Int4(*val),
-                    DataType::UnsignedInt8(val) => DataType::Int8(*val),
+                    DataType::TinyIntUnsigned(val) => DataType::TinyInt(*val),
+                    DataType::BigIntUnsigned(val) => DataType::BigInt(*val),
+                    DataType::SmallIntUnsigned(val) => DataType::SmallInt(*val),
+                    DataType::IntUnsigned(val) => DataType::Int(*val),
+                    DataType::MediumIntUnsigned(val) => DataType::MediumInt(*val),
+                    DataType::Int2Unsigned(val) => DataType::Int2(*val),
+                    DataType::Int4Unsigned(val) => DataType::Int4(*val),
+                    DataType::Int8Unsigned(val) => DataType::Int8(*val),
                     DataType::String(val) => {
                         if let Some(val) = val {
                             DataType::Varchar(Some(CharacterLength::IntegerLength {
@@ -80,7 +82,11 @@ impl VisitorMut for IdentifierQuoter {
 
     fn post_visit_relation(&mut self, relation: &mut ObjectName) -> ControlFlow<Self::Break> {
         info!("post_visit_relation: {:?}", relation);
-        relation.0.iter_mut().for_each(quote_and_lowercase_ident);
+        relation.0.iter_mut().for_each(|onp| {
+            let mut ident = onp.as_ident().unwrap().clone();
+            quote_and_lowercase_ident(&mut ident);
+            *onp = ObjectNamePart::Identifier(ident);
+        });
         ControlFlow::Continue(())
     }
 
