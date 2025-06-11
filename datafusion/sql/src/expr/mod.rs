@@ -171,6 +171,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         expr = self.rewrite_partial_qualifier(expr, schema);
         self.validate_schema_satisfies_exprs(schema, std::slice::from_ref(&expr))?;
         let (expr, _) = expr.infer_placeholder_types(schema)?;
+
         Ok(expr)
     }
 
@@ -609,11 +610,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
             #[expect(deprecated)]
             SQLExpr::Wildcard(_token) => Ok(Expr::Wildcard {
+                symbol: None,
                 qualifier: None,
                 options: Box::new(WildcardOptions::default()),
             }),
             #[expect(deprecated)]
             SQLExpr::QualifiedWildcard(object_name, _token) => Ok(Expr::Wildcard {
+                symbol: None,
                 qualifier: Some(self.object_name_to_table_reference(object_name)?),
                 options: Box::new(WildcardOptions::default()),
             }),
