@@ -1131,8 +1131,12 @@ impl GroupedHashAggregateStream {
     fn switch_to_skip_aggregation(&mut self) -> Result<()> {
         if let Some(probe) = self.skip_aggregation_probe.as_mut() {
             if probe.should_skip() {
-                if let Some(batch) = self.emit(EmitTo::All, false)? {
-                    self.exec_state = ExecutionState::ProducingOutput(batch);
+                let batch = self.emit(EmitTo::All, false)?;
+                self.clear_all();
+                self.update_memory_reservation()?;
+                self.exec_state = match batch {
+                    Some(batch) => ExecutionState::ProducingOutput(batch),
+                    None => ExecutionState::SkippingAggregation,
                 };
             }
         }
@@ -1175,5 +1179,128 @@ impl GroupedHashAggregateStream {
         let states_batch = RecordBatch::try_new(self.schema(), output)?;
 
         Ok(states_batch)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test::TestMemoryExec;
+    use crate::ExecutionPlan;
+    use arrow::array::{ArrayRef, Int32Array};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
+    use datafusion_common::ScalarValue;
+    use datafusion_execution::config::SessionConfig;
+    use datafusion_functions_aggregate::count::count_udaf;
+    use datafusion_physical_expr::aggregate::AggregateExprBuilder;
+    use datafusion_physical_expr::expressions::col;
+    use std::sync::Arc;
+
+    fn create_partial_stream() -> Result<(GroupedHashAggregateStream, RecordBatch)> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Int32, false),
+            Field::new("val", DataType::Int32, false),
+        ]));
+
+        let group_by =
+            PhysicalGroupBy::new_single(vec![(col("key", &schema)?, "key".to_string())]);
+
+        let aggr_expr =
+            vec![
+                AggregateExprBuilder::new(count_udaf(), vec![col("val", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias(String::from("COUNT(val)"))
+                    .build()
+                    .map(Arc::new)?,
+            ];
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef,
+                Arc::new(Int32Array::from(vec![10, 20, 30])) as ArrayRef,
+            ],
+        )?;
+
+        let input = TestMemoryExec::try_new_exec(
+            &[vec![batch.clone()]],
+            Arc::clone(&schema),
+            None,
+        )?;
+        let input: Arc<dyn ExecutionPlan> = input;
+
+        let mut session_config = SessionConfig::default();
+        session_config = session_config.set(
+            "datafusion.execution.skip_partial_aggregation_probe_rows_threshold",
+            &ScalarValue::Int64(Some(1)),
+        );
+        session_config = session_config.set(
+            "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
+            &ScalarValue::Float64(Some(0.0)),
+        );
+
+        let context =
+            Arc::new(TaskContext::default().with_session_config(session_config));
+
+        let aggregate_exec = AggregateExec::try_new(
+            AggregateMode::Partial,
+            group_by,
+            aggr_expr,
+            vec![None],
+            input,
+            Arc::clone(&schema),
+        )?;
+
+        let stream = GroupedHashAggregateStream::new(&aggregate_exec, context, 0)?;
+
+        Ok((stream, batch))
+    }
+
+    #[test]
+    fn switch_to_skip_aggregation_releases_memory_after_emit() -> Result<()> {
+        let (mut stream, batch) = create_partial_stream()?;
+
+        stream.group_aggregate_batch(batch.clone())?;
+        let before = stream.reservation.size();
+        assert!(before > 0);
+
+        stream.update_skip_aggregation_probe(batch.num_rows());
+        stream.switch_to_skip_aggregation()?;
+
+        let after = stream.reservation.size();
+
+        assert!(after < before);
+        assert!(stream.group_values.is_empty());
+        assert_eq!(stream.current_group_indices.capacity(), 0);
+        assert!(matches!(
+            stream.exec_state,
+            ExecutionState::ProducingOutput(_)
+        ));
+
+        Ok(())
+    }
+
+    #[test]
+    fn switch_to_skip_aggregation_releases_memory_without_emit() -> Result<()> {
+        let (mut stream, _) = create_partial_stream()?;
+
+        stream.current_group_indices.resize(16, 0);
+        stream.current_group_indices.clear();
+        stream.update_memory_reservation()?;
+        let before = stream.reservation.size();
+        assert!(before > 0);
+
+        stream.update_skip_aggregation_probe(1);
+        stream.switch_to_skip_aggregation()?;
+
+        let after = stream.reservation.size();
+        assert!(after < before);
+        assert!(matches!(
+            stream.exec_state,
+            ExecutionState::SkippingAggregation
+        ));
+
+        Ok(())
     }
 }
