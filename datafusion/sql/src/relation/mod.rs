@@ -26,33 +26,103 @@ use datafusion_common::{
 use datafusion_expr::builder::subquery_alias;
 use datafusion_expr::{expr::Unnest, Expr, LogicalPlan, LogicalPlanBuilder};
 use datafusion_expr::{Subquery, SubqueryAlias};
-use sqlparser::ast::{FunctionArg, FunctionArgExpr, Spanned, TableFactor};
+use sqlparser::ast::{FunctionArg, FunctionArgExpr, Spanned, TableAlias, TableFactor};
 
 mod join;
 
+/// Allows [`RelationPlanner`] implementations to delegate planning to the next
+/// registered planner or the default [`SqlToRel`] implementation.
+pub trait RelationPlannerDelegate<'a, S: ContextProvider> {
+    /// Invoke the next [`RelationPlanner`] in the chain, if any.
+    fn plan_next(
+        &self,
+        relation: &TableFactor,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Option<LogicalPlan>>;
+
+    /// Invoke the default [`SqlToRel`] implementation for `relation`.
+    fn plan_default(
+        &self,
+        relation: &TableFactor,
+        planner_context: &mut PlannerContext,
+    ) -> Result<LogicalPlan>;
+}
+
 impl<S: ContextProvider> SqlToRel<'_, S> {
+    /// Create a `LogicalPlan` that scans the named relation
     /// Create a `LogicalPlan` that scans the named relation
     fn create_relation(
         &self,
         relation: TableFactor,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
+        self.plan_relation_with_extensions(&relation, planner_context)
+    }
+
+    fn plan_relation_with_extensions(
+        &self,
+        relation: &TableFactor,
+        planner_context: &mut PlannerContext,
+    ) -> Result<LogicalPlan> {
+        let alias = relation_alias(relation);
+        let plan = if let Some(plan) =
+            self.plan_relation_with_chain(relation, planner_context, 0)?
+        {
+            plan
+        } else {
+            self.create_relation_default(relation, planner_context)?
+        };
+
+        let optimized_plan = optimize_subquery_sort(plan)?.data;
+        if let Some(alias) = alias {
+            self.apply_table_alias(optimized_plan, alias)
+        } else {
+            Ok(optimized_plan)
+        }
+    }
+
+    fn plan_relation_with_chain(
+        &self,
+        relation: &TableFactor,
+        planner_context: &mut PlannerContext,
+        index: usize,
+    ) -> Result<Option<LogicalPlan>> {
+        if let Some(planner) = self.relation_planners().get(index) {
+            let mut delegate = RelationPlannerDelegateImpl {
+                sql_to_rel: self,
+                next_index: index + 1,
+            };
+            let result =
+                planner.plan_relation(relation, self, &mut delegate, planner_context)?;
+            if result.is_some() {
+                Ok(result)
+            } else {
+                self.plan_relation_with_chain(relation, planner_context, index + 1)
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn create_relation_default(
+        &self,
+        relation: &TableFactor,
+        planner_context: &mut PlannerContext,
+    ) -> Result<LogicalPlan> {
         let relation_span = relation.span();
-        let (plan, alias) = match relation {
-            TableFactor::Table {
-                name, alias, args, ..
-            } => {
+        let plan = match relation {
+            TableFactor::Table { name, args, .. } => {
                 if let Some(func_args) = args {
                     let tbl_func_name =
                         name.0.first().unwrap().as_ident().unwrap().to_string();
                     let args = func_args
                         .args
-                        .into_iter()
+                        .iter()
                         .flat_map(|arg| {
                             if let FunctionArg::Unnamed(FunctionArgExpr::Expr(expr)) = arg
                             {
                                 self.sql_expr_to_logical_expr(
-                                    expr,
+                                    expr.clone(),
                                     &DFSchema::empty(),
                                     planner_context,
                                 )
@@ -64,78 +134,65 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     let provider = self
                         .context_provider
                         .get_table_function_source(&tbl_func_name, args)?;
-                    let plan = LogicalPlanBuilder::scan(
+                    LogicalPlanBuilder::scan(
                         TableReference::Bare {
                             table: format!("{tbl_func_name}()").into(),
                         },
                         provider,
                         None,
                     )?
-                    .build()?;
-                    (plan, alias)
+                    .build()?
                 } else {
-                    // Normalize name and alias
+                    let name = name.clone();
                     let table_ref = self.object_name_to_table_reference(name)?;
                     let table_name = table_ref.to_string();
                     let cte = planner_context.get_cte(&table_name);
-                    (
-                        match (
-                            cte,
-                            self.context_provider.get_table_source(table_ref.clone()),
-                        ) {
-                            (Some(cte_plan), _) => Ok(cte_plan.clone()),
-                            (_, Ok(provider)) => LogicalPlanBuilder::scan(
-                                table_ref.clone(),
-                                provider,
-                                None,
-                            )?
-                            .build(),
-                            (None, Err(e)) => {
-                                let e = e.with_diagnostic(Diagnostic::new_error(
-                                    format!("table '{table_ref}' not found"),
-                                    Span::try_from_sqlparser_span(relation_span),
-                                ));
-                                Err(e)
-                            }
-                        }?,
-                        alias,
-                    )
+                    match (
+                        cte,
+                        self.context_provider.get_table_source(table_ref.clone()),
+                    ) {
+                        (Some(cte_plan), _) => Ok(cte_plan.clone()),
+                        (_, Ok(provider)) => {
+                            LogicalPlanBuilder::scan(table_ref.clone(), provider, None)?
+                                .build()
+                        }
+                        (None, Err(e)) => {
+                            let e = e.with_diagnostic(Diagnostic::new_error(
+                                format!("table '{table_ref}' not found"),
+                                Span::try_from_sqlparser_span(relation_span),
+                            ));
+                            Err(e)
+                        }
+                    }?
                 }
             }
-            TableFactor::Derived {
-                subquery, alias, ..
-            } => {
-                let logical_plan = self.query_to_plan(*subquery, planner_context)?;
-                (logical_plan, alias)
+            TableFactor::Derived { subquery, .. } => {
+                let subquery = *subquery.clone();
+                self.query_to_plan(subquery, planner_context)?
             }
             TableFactor::NestedJoin {
-                table_with_joins,
-                alias,
-            } => (
-                self.plan_table_with_joins(*table_with_joins, planner_context)?,
-                alias,
-            ),
+                table_with_joins, ..
+            } => {
+                self.plan_table_with_joins(*table_with_joins.clone(), planner_context)?
+            }
             TableFactor::UNNEST {
-                alias,
                 array_exprs,
                 with_offset: false,
                 with_offset_alias: None,
                 with_ordinality,
+                ..
             } => {
-                if with_ordinality {
+                if *with_ordinality {
                     return not_impl_err!("UNNEST with ordinality is not supported yet");
                 }
 
-                // Unnest table factor has empty input
                 let schema = DFSchema::empty();
                 let input = LogicalPlanBuilder::empty(true).build()?;
-                // Unnest table factor can have multiple arguments.
-                // We treat each argument as a separate unnest expression.
                 let unnest_exprs = array_exprs
-                    .into_iter()
+                    .iter()
                     .map(|sql_expr| {
                         let expr = self.sql_expr_to_logical_expr(
-                            sql_expr,
+                            sql_expr.clone(),
                             &schema,
                             planner_context,
                         )?;
@@ -146,44 +203,39 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 if unnest_exprs.is_empty() {
                     return plan_err!("UNNEST must have at least one argument");
                 }
-                let logical_plan = self.try_process_unnest(input, unnest_exprs)?;
-                (logical_plan, alias)
+                self.try_process_unnest(input, unnest_exprs)?
             }
             TableFactor::UNNEST { .. } => {
                 return not_impl_err!(
                     "UNNEST table factor with offset is not supported yet"
                 );
             }
-            TableFactor::Function {
-                name, args, alias, ..
-            } => {
-                let tbl_func_ref = self.object_name_to_table_reference(name)?;
+            TableFactor::Function { name, args, .. } => {
+                let tbl_func_ref = self.object_name_to_table_reference(name.clone())?;
                 let schema = planner_context
                     .outer_query_schema()
                     .cloned()
                     .unwrap_or_else(DFSchema::empty);
                 let func_args = args
-                    .into_iter()
+                    .iter()
                     .map(|arg| match arg {
                         FunctionArg::Unnamed(FunctionArgExpr::Expr(expr))
                         | FunctionArg::Named {
                             arg: FunctionArgExpr::Expr(expr),
                             ..
-                        } => {
-                            self.sql_expr_to_logical_expr(expr, &schema, planner_context)
-                        }
+                        } => self.sql_expr_to_logical_expr(
+                            expr.clone(),
+                            &schema,
+                            planner_context,
+                        ),
                         _ => plan_err!("Unsupported function argument: {arg:?}"),
                     })
                     .collect::<Result<Vec<Expr>>>()?;
                 let provider = self
                     .context_provider
                     .get_table_function_source(tbl_func_ref.table(), func_args)?;
-                let plan =
-                    LogicalPlanBuilder::scan(tbl_func_ref.table(), provider, None)?
-                        .build()?;
-                (plan, alias)
+                LogicalPlanBuilder::scan(tbl_func_ref.table(), provider, None)?.build()?
             }
-            // @todo Support TableFactory::TableFunction?
             _ => {
                 return not_impl_err!(
                     "Unsupported ast node {relation:?} in create_relation"
@@ -191,14 +243,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
         };
 
-        let optimized_plan = optimize_subquery_sort(plan)?.data;
-        if let Some(alias) = alias {
-            self.apply_table_alias(optimized_plan, alias)
-        } else {
-            Ok(optimized_plan)
-        }
+        Ok(plan)
     }
-
     pub(crate) fn create_relation_subquery(
         &self,
         subquery: TableFactor,
@@ -252,6 +298,47 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 spans: Spans::new(),
             })),
         }
+    }
+}
+
+fn relation_alias(relation: &TableFactor) -> Option<TableAlias> {
+    match relation {
+        TableFactor::Table { alias, .. }
+        | TableFactor::Derived { alias, .. }
+        | TableFactor::NestedJoin { alias, .. }
+        | TableFactor::UNNEST { alias, .. }
+        | TableFactor::Function { alias, .. } => alias.clone(),
+        _ => None,
+    }
+}
+
+struct RelationPlannerDelegateImpl<'a, S: ContextProvider> {
+    sql_to_rel: &'a SqlToRel<'a, S>,
+    next_index: usize,
+}
+
+impl<'a, S: ContextProvider> RelationPlannerDelegate<'a, S>
+    for RelationPlannerDelegateImpl<'a, S>
+{
+    fn plan_next(
+        &self,
+        relation: &TableFactor,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Option<LogicalPlan>> {
+        self.sql_to_rel.plan_relation_with_chain(
+            relation,
+            planner_context,
+            self.next_index,
+        )
+    }
+
+    fn plan_default(
+        &self,
+        relation: &TableFactor,
+        planner_context: &mut PlannerContext,
+    ) -> Result<LogicalPlan> {
+        self.sql_to_rel
+            .create_relation_default(relation, planner_context)
     }
 }
 
