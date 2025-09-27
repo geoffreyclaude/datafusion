@@ -56,6 +56,14 @@ path = "examples/external_dependency/query-aws-s3.rs"
 name = "custom_file_casts"
 path = "examples/custom_file_casts.rs"
 
+[[example]]
+name = "relation_planner_basic"
+path = "examples/relation_planner/basic.rs"
+
+[[example]]
+name = "relation_planner_chain"
+path = "examples/relation_planner/chain.rs"
+
 [dev-dependencies]
 arrow = { workspace = true }
 # arrow_schema is required for record_batch! macro :sad:

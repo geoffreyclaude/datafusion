@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod relation_planner_support;
+mod support;
 
-use relation_planner_support::{plan_sql, InMemoryContextProvider};
+use support::{plan_sql, InMemoryContextProvider};
 
 use std::sync::Arc;
 
