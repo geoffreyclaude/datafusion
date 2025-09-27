@@ -49,6 +49,7 @@ struct MatchRecognizeNode {
 }
 
 impl MatchRecognizeNode {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         input: LogicalPlan,
         partition_by: Vec<String>,

@@ -30,10 +30,10 @@ use sqlparser::ast::{FunctionArg, FunctionArgExpr, Spanned, TableAlias, TableFac
 
 mod join;
 
-/// Allows [`RelationPlanner`] implementations to delegate planning to the next
+/// Allows [RelationPlanner` implementations to delegate planning to the next
 /// registered planner or the default [`SqlToRel`] implementation.
 pub trait RelationPlannerDelegate<'a, S: ContextProvider> {
-    /// Invoke the next [`RelationPlanner`] in the chain, if any.
+    /// Invoke the next `RelationPlanner` in the chain, if any.
     fn plan_next(
         &self,
         relation: &TableFactor,

@@ -4924,13 +4924,12 @@ impl RelationPlanner<MockContextProvider> for DefaultOnlyPlanner {
         planner_context: &mut PlannerContext,
     ) -> Result<Option<LogicalPlan>> {
         if let TableFactor::Table { name, .. } = relation {
-            if name.to_string() == "orders" {
-                if delegate.plan_next(relation, planner_context)?.is_none() {
-                    let plan = delegate.plan_default(relation, planner_context)?;
-                    let plan =
-                        LogicalPlanBuilder::from(plan).limit(0, Some(5))?.build()?;
-                    return Ok(Some(plan));
-                }
+            if name.to_string() == "orders"
+                && delegate.plan_next(relation, planner_context)?.is_none()
+            {
+                let plan = delegate.plan_default(relation, planner_context)?;
+                let plan = LogicalPlanBuilder::from(plan).limit(0, Some(5))?.build()?;
+                return Ok(Some(plan));
             }
         }
         Ok(None)
@@ -4986,7 +4985,7 @@ fn relation_planner_override_relation() -> Result<()> {
                     LogicalPlan::EmptyRelation(_)
                 ));
             }
-            other => panic!("expected SubqueryAlias, got {:#?}", other),
+            other => panic!("expected SubqueryAlias, got {other:#?}"),
         }
     } else {
         panic!("expected projection plan");
