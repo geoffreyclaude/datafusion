@@ -64,6 +64,10 @@ path = "examples/relation_planner/basic.rs"
 name = "relation_planner_chain"
 path = "examples/relation_planner/chain.rs"
 
+[[example]]
+name = "relation_planner_match_recognize"
+path = "examples/relation_planner/match_recognize.rs"
+
 [dev-dependencies]
 arrow = { workspace = true }
 # arrow_schema is required for record_batch! macro :sad:
