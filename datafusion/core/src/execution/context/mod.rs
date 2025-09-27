@@ -54,7 +54,9 @@ use crate::{
 };
 
 // backwards compatibility
-pub use crate::execution::session_state::SessionState;
+pub use crate::execution::session_state::{
+    SessionRelationPlanner, SessionSqlToRel, SessionState,
+};
 
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
@@ -462,6 +464,11 @@ impl SessionContext {
     ) -> Self {
         self.state.write().set_function_factory(function_factory);
         self
+    }
+
+    /// Registers a relation planner that participates in SQL planning for this session.
+    pub fn register_relation_planner(&self, planner: Arc<dyn SessionRelationPlanner>) {
+        self.state.write().register_relation_planner(planner);
     }
 
     /// Adds an optimizer rule to the end of the existing rules.

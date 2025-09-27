@@ -52,6 +52,18 @@ path = "examples/external_dependency/dataframe-to-s3.rs"
 name = "query_aws_s3"
 path = "examples/external_dependency/query-aws-s3.rs"
 
+[[example]]
+name = "relation_planner_basic"
+path = "examples/relation_planner/basic.rs"
+
+[[example]]
+name = "relation_planner_chain"
+path = "examples/relation_planner/chain.rs"
+
+[[example]]
+name = "relation_planner_match_recognize"
+path = "examples/relation_planner/match_recognize.rs"
+
 [dev-dependencies]
 arrow = { workspace = true }
 # arrow_schema is required for record_batch! macro :sad:

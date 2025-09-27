@@ -70,14 +70,16 @@ use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_session::Session;
 use datafusion_sql::parser::{DFParserBuilder, Statement};
-use datafusion_sql::planner::{ContextProvider, ParserOptions, PlannerContext, SqlToRel};
+use datafusion_sql::planner::{
+    ContextProvider, ParserOptions, PlannerContext, RelationPlanner, SqlToRel,
+};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use itertools::Itertools;
 use log::{debug, info};
 use object_store::ObjectStore;
-use sqlparser::ast::{Expr as SQLExpr, ExprWithAlias as SQLExprWithAlias};
+use sqlparser::ast::{Expr as SQLExpr, ExprWithAlias as SQLExprWithAlias, TableFactor};
 use sqlparser::dialect::dialect_from_str;
 use url::Url;
 use uuid::Uuid;
@@ -123,6 +125,58 @@ use uuid::Uuid;
 /// [`SessionContext`].
 ///
 /// [`SessionContext`]: crate::execution::context::SessionContext
+pub type SessionSqlToRel<'sql, 'state> = SqlToRel<'sql, SessionContextProvider<'state>>;
+
+/// Custom relation planner registered against a [`SessionContext`].
+pub trait SessionRelationPlanner: Send + Sync {
+    /// Attempt to plan `relation`. Returning `Ok(Some(plan))` short-circuits the
+    /// planner chain, while `Ok(None)` defers to later planners or the default
+    /// SQL planner.
+    fn plan_relation<'sql, 'state>(
+        &self,
+        relation: &TableFactor,
+        sql_to_rel: &SessionSqlToRel<'sql, 'state>,
+        planner_context: &mut PlannerContext,
+    ) -> datafusion_common::Result<Option<LogicalPlan>>;
+}
+
+#[derive(Clone)]
+struct RegisteredRelationPlanner {
+    inner: Arc<dyn SessionRelationPlanner>,
+}
+
+impl RegisteredRelationPlanner {
+    fn new(inner: Arc<dyn SessionRelationPlanner>) -> Self {
+        Self { inner }
+    }
+}
+
+impl<'state> RelationPlanner<SessionContextProvider<'state>>
+    for RegisteredRelationPlanner
+{
+    fn plan_relation(
+        &self,
+        relation: &TableFactor,
+        sql_to_rel: &SqlToRel<'_, SessionContextProvider<'state>>,
+        planner_context: &mut PlannerContext,
+    ) -> datafusion_common::Result<Option<LogicalPlan>> {
+        self.inner
+            .plan_relation(relation, sql_to_rel, planner_context)
+    }
+}
+
+fn session_relation_planners_to_sql<'a>(
+    planners: &[Arc<dyn SessionRelationPlanner>],
+) -> Vec<Arc<dyn RelationPlanner<SessionContextProvider<'a>> + Send + Sync>> {
+    planners
+        .iter()
+        .map(|planner| {
+            Arc::new(RegisteredRelationPlanner::new(Arc::clone(planner)))
+                as Arc<dyn RelationPlanner<SessionContextProvider<'a>> + Send + Sync>
+        })
+        .collect()
+}
+
 #[derive(Clone)]
 pub struct SessionState {
     /// A unique UUID that identifies the session
@@ -176,6 +230,9 @@ pub struct SessionState {
     /// It will be invoked on `CREATE FUNCTION` statements.
     /// thus, changing dialect o PostgreSql is required
     function_factory: Option<Arc<dyn FunctionFactory>>,
+    /// Collection of registered relation planners used while converting SQL
+    /// statements into logical plans.
+    relation_planners: Vec<Arc<dyn SessionRelationPlanner>>,
     /// Cache logical plans of prepared statements for later execution.
     /// Key is the prepared statement name.
     prepared_plans: HashMap<String, Arc<PreparedPlan>>,
@@ -206,6 +263,7 @@ impl Debug for SessionState {
             .field("scalar_functions", &self.scalar_functions)
             .field("aggregate_functions", &self.aggregate_functions)
             .field("window_functions", &self.window_functions)
+            .field("relation_planners", &self.relation_planners.len())
             .field("prepared_plans", &self.prepared_plans)
             .finish()
     }
@@ -457,6 +515,27 @@ impl SessionState {
         Ok(table_refs)
     }
 
+    /// Returns the registered relation planners for this session.
+    pub fn relation_planners(&self) -> &[Arc<dyn SessionRelationPlanner>] {
+        &self.relation_planners
+    }
+
+    /// Replaces the registered relation planners for this session.
+    pub fn set_relation_planners(
+        &mut self,
+        relation_planners: Vec<Arc<dyn SessionRelationPlanner>>,
+    ) {
+        self.relation_planners = relation_planners;
+    }
+
+    /// Registers an additional relation planner for this session.
+    pub fn register_relation_planner(
+        &mut self,
+        planner: Arc<dyn SessionRelationPlanner>,
+    ) {
+        self.relation_planners.push(planner);
+    }
+
     /// Convert an AST Statement into a LogicalPlan
     pub async fn statement_to_plan(
         &self,
@@ -481,7 +560,9 @@ impl SessionState {
             }
         }
 
-        let query = SqlToRel::new_with_options(&provider, self.get_parser_options());
+        let relation_planners = session_relation_planners_to_sql(&self.relation_planners);
+        let query = SqlToRel::new_with_options(&provider, self.get_parser_options())
+            .with_relation_planners(relation_planners);
         query.statement_to_plan(statement)
     }
 
@@ -910,6 +991,7 @@ pub struct SessionStateBuilder {
     table_factories: Option<HashMap<String, Arc<dyn TableProviderFactory>>>,
     runtime_env: Option<Arc<RuntimeEnv>>,
     function_factory: Option<Arc<dyn FunctionFactory>>,
+    relation_planners: Option<Vec<Arc<dyn SessionRelationPlanner>>>,
     // fields to support convenience functions
     analyzer_rules: Option<Vec<Arc<dyn AnalyzerRule + Send + Sync>>>,
     optimizer_rules: Option<Vec<Arc<dyn OptimizerRule + Send + Sync>>>,
@@ -946,6 +1028,7 @@ impl SessionStateBuilder {
             table_factories: None,
             runtime_env: None,
             function_factory: None,
+            relation_planners: None,
             // fields to support convenience functions
             analyzer_rules: None,
             optimizer_rules: None,
@@ -997,6 +1080,7 @@ impl SessionStateBuilder {
             table_factories: Some(existing.table_factories),
             runtime_env: Some(existing.runtime_env),
             function_factory: existing.function_factory,
+            relation_planners: Some(existing.relation_planners),
 
             // fields to support convenience functions
             analyzer_rules: None,
@@ -1064,6 +1148,29 @@ impl SessionStateBuilder {
     /// Set the session id.
     pub fn with_session_id(mut self, session_id: String) -> Self {
         self.session_id = Some(session_id);
+        self
+    }
+
+    /// Registers an additional relation planner that will run before the
+    /// default SQL planning implementation.
+    pub fn with_relation_planner(
+        mut self,
+        relation_planner: Arc<dyn SessionRelationPlanner>,
+    ) -> Self {
+        self.relation_planners
+            .get_or_insert_with(Vec::new)
+            .push(relation_planner);
+        self
+    }
+
+    /// Extends the session with additional relation planners.
+    pub fn with_relation_planners(
+        mut self,
+        relation_planners: Vec<Arc<dyn SessionRelationPlanner>>,
+    ) -> Self {
+        self.relation_planners
+            .get_or_insert_with(Vec::new)
+            .extend(relation_planners);
         self
     }
 
@@ -1347,6 +1454,7 @@ impl SessionStateBuilder {
             table_factories,
             runtime_env,
             function_factory,
+            relation_planners,
             analyzer_rules,
             optimizer_rules,
             physical_optimizer_rules,
@@ -1382,6 +1490,7 @@ impl SessionStateBuilder {
             table_factories: table_factories.unwrap_or_default(),
             runtime_env,
             function_factory,
+            relation_planners: relation_planners.unwrap_or_default(),
             prepared_plans: HashMap::new(),
         };
 
@@ -1635,7 +1744,7 @@ impl From<SessionState> for SessionStateBuilder {
 ///
 /// This is used so the SQL planner can access the state of the session without
 /// having a direct dependency on the [`SessionState`] struct (and core crate)
-struct SessionContextProvider<'a> {
+pub struct SessionContextProvider<'a> {
     state: &'a SessionState,
     tables: HashMap<ResolvedTableReference, Arc<dyn TableSource>>,
 }

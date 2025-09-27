@@ -22,16 +22,18 @@ use std::vec;
 
 use arrow::datatypes::{TimeUnit::Nanosecond, *};
 use common::MockContextProvider;
-use datafusion_common::{assert_contains, DataFusionError, Result};
+use datafusion_common::{assert_contains, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
-    col, logical_plan::LogicalPlan, test::function_stub::sum_udaf, ColumnarValue,
-    CreateIndex, DdlStatement, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
-    Volatility,
+    col,
+    logical_plan::{LogicalPlan, LogicalPlanBuilder},
+    test::function_stub::sum_udaf,
+    ColumnarValue, CreateIndex, DdlStatement, Expr, ScalarFunctionArgs, ScalarUDF,
+    ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_functions::{string, unicode};
 use datafusion_sql::{
     parser::DFParser,
-    planner::{ParserOptions, SqlToRel},
+    planner::{ParserOptions, PlannerContext, RelationPlanner, SqlToRel},
 };
 
 use crate::common::{CustomExprPlanner, CustomTypePlanner, MockSessionState};
@@ -45,6 +47,7 @@ use datafusion_functions_nested::make_array::make_array_udf;
 use datafusion_functions_window::rank::rank_udwf;
 use insta::{allow_duplicates, assert_snapshot};
 use rstest::rstest;
+use sqlparser::ast::{Ident, ObjectName, ObjectNamePart, TableFactor};
 use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
 
 mod cases;
@@ -4713,4 +4716,239 @@ fn test_using_join_wildcard_schema() {
             "t3.d".to_string()
         ]
     );
+}
+
+struct OverrideTablePlanner;
+
+impl RelationPlanner<MockContextProvider> for OverrideTablePlanner {
+    fn plan_relation(
+        &self,
+        relation: &TableFactor,
+        _sql_to_rel: &SqlToRel<'_, MockContextProvider>,
+        _planner_context: &mut PlannerContext,
+    ) -> Result<Option<LogicalPlan>> {
+        if let TableFactor::Table { name, .. } = relation {
+            if name.to_string() == "ext_table" {
+                let plan = LogicalPlanBuilder::empty(true).build()?;
+                return Ok(Some(plan));
+            }
+        }
+        Ok(None)
+    }
+}
+
+struct DistinctPlanner;
+
+impl RelationPlanner<MockContextProvider> for DistinctPlanner {
+    fn plan_relation(
+        &self,
+        relation: &TableFactor,
+        sql_to_rel: &SqlToRel<'_, MockContextProvider>,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Option<LogicalPlan>> {
+        if let TableFactor::Table { name, .. } = relation {
+            if let Some(base) = name.to_string().strip_suffix("_dedup") {
+                let mut nested = relation.clone();
+                if let TableFactor::Table { name, .. } = &mut nested {
+                    *name =
+                        ObjectName(vec![ObjectNamePart::Identifier(Ident::new(base))]);
+                }
+                let plan = sql_to_rel.plan_table_factor(nested, planner_context)?;
+                let plan = LogicalPlanBuilder::from(plan).distinct()?.build()?;
+                return Ok(Some(plan));
+            }
+        }
+        Ok(None)
+    }
+}
+
+struct LimitPlanner;
+
+impl RelationPlanner<MockContextProvider> for LimitPlanner {
+    fn plan_relation(
+        &self,
+        relation: &TableFactor,
+        sql_to_rel: &SqlToRel<'_, MockContextProvider>,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Option<LogicalPlan>> {
+        if let TableFactor::Table { name, .. } = relation {
+            if let Some(base) = name.to_string().strip_prefix("limit_") {
+                let mut nested = relation.clone();
+                if let TableFactor::Table { name, .. } = &mut nested {
+                    *name =
+                        ObjectName(vec![ObjectNamePart::Identifier(Ident::new(base))]);
+                }
+                let plan = sql_to_rel.plan_table_factor(nested, planner_context)?;
+                let plan = LogicalPlanBuilder::from(plan).limit(0, Some(5))?.build()?;
+                return Ok(Some(plan));
+            }
+        }
+        Ok(None)
+    }
+}
+
+struct ProxyPlanner;
+
+impl RelationPlanner<MockContextProvider> for ProxyPlanner {
+    fn plan_relation(
+        &self,
+        relation: &TableFactor,
+        sql_to_rel: &SqlToRel<'_, MockContextProvider>,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Option<LogicalPlan>> {
+        if let TableFactor::Table { name, .. } = relation {
+            if name.to_string() == "proxy" {
+                let mut nested_relation = relation.clone();
+                if let TableFactor::Table { name, .. } = &mut nested_relation {
+                    *name = ObjectName(vec![ObjectNamePart::Identifier(Ident::new(
+                        "person_dedup",
+                    ))]);
+                }
+                let plan =
+                    sql_to_rel.plan_table_factor(nested_relation, planner_context)?;
+                return Ok(Some(plan));
+            }
+        }
+        Ok(None)
+    }
+}
+
+#[test]
+fn relation_planner_override_relation() -> Result<()> {
+    let context = MockContextProvider {
+        state: MockSessionState::default(),
+    };
+    let planner = SqlToRel::new(&context)
+        .with_relation_planners(vec![Arc::new(OverrideTablePlanner)
+            as Arc<dyn RelationPlanner<MockContextProvider> + Send + Sync>]);
+    let statement = DFParser::parse_sql("SELECT * FROM ext_table AS alias")?
+        .into_iter()
+        .next()
+        .unwrap();
+    let plan = planner.statement_to_plan(statement)?;
+    if let LogicalPlan::Projection(projection) = plan {
+        match projection.input.as_ref() {
+            LogicalPlan::SubqueryAlias(alias_plan) => {
+                assert_eq!(alias_plan.alias.to_string(), "alias");
+                assert!(matches!(
+                    alias_plan.input.as_ref(),
+                    LogicalPlan::EmptyRelation(_)
+                ));
+            }
+            other => panic!("expected SubqueryAlias, got {:#?}", other),
+        }
+    } else {
+        panic!("expected projection plan");
+    }
+    Ok(())
+}
+
+#[test]
+fn relation_planner_chain_handles_rewrites() -> Result<()> {
+    let context = MockContextProvider {
+        state: MockSessionState::default(),
+    };
+    let planners: Vec<Arc<dyn RelationPlanner<MockContextProvider> + Send + Sync>> =
+        vec![Arc::new(DistinctPlanner)];
+    let planner = SqlToRel::new(&context).with_relation_planners(planners);
+    let statement = DFParser::parse_sql("SELECT * FROM person_dedup")?
+        .into_iter()
+        .next()
+        .unwrap();
+    let plan = planner.statement_to_plan(statement)?;
+    if let LogicalPlan::Projection(projection) = plan {
+        assert!(matches!(
+            projection.input.as_ref(),
+            LogicalPlan::Distinct(_)
+        ));
+    } else {
+        panic!("expected projection plan");
+    }
+    Ok(())
+}
+
+#[test]
+fn relation_planner_limit_rewrite() -> Result<()> {
+    let context = MockContextProvider {
+        state: MockSessionState::default(),
+    };
+    let planners: Vec<Arc<dyn RelationPlanner<MockContextProvider> + Send + Sync>> =
+        vec![Arc::new(LimitPlanner)];
+    let planner = SqlToRel::new(&context).with_relation_planners(planners);
+    let statement = DFParser::parse_sql("SELECT * FROM limit_orders")?
+        .into_iter()
+        .next()
+        .unwrap();
+    let plan = planner.statement_to_plan(statement)?;
+    if let LogicalPlan::Projection(projection) = plan {
+        match projection.input.as_ref() {
+            LogicalPlan::Limit(limit) => {
+                if let Some(expr) = &limit.fetch {
+                    match expr.as_ref() {
+                        Expr::Literal(ScalarValue::UInt64(Some(value)), _) => {
+                            assert_eq!(*value, 5);
+                        }
+                        Expr::Literal(ScalarValue::Int64(Some(value)), _) => {
+                            assert_eq!(*value, 5);
+                        }
+                        other => panic!("unexpected limit expression: {other:?}"),
+                    }
+                } else {
+                    panic!("limit missing fetch");
+                }
+            }
+            other => panic!("expected Limit, got {other:?}"),
+        }
+    } else {
+        panic!("expected projection plan");
+    }
+    Ok(())
+}
+
+#[test]
+fn relation_planner_falls_back_to_default() -> Result<()> {
+    let context = MockContextProvider {
+        state: MockSessionState::default(),
+    };
+    let planners: Vec<Arc<dyn RelationPlanner<MockContextProvider> + Send + Sync>> =
+        vec![Arc::new(LimitPlanner)];
+    let planner = SqlToRel::new(&context).with_relation_planners(planners);
+    let statement = DFParser::parse_sql("SELECT * FROM orders")?
+        .into_iter()
+        .next()
+        .unwrap();
+    let plan = planner.statement_to_plan(statement)?;
+    if let LogicalPlan::Projection(projection) = plan {
+        assert!(matches!(
+            projection.input.as_ref(),
+            LogicalPlan::TableScan(_)
+        ));
+    } else {
+        panic!("expected projection plan");
+    }
+    Ok(())
+}
+
+#[test]
+fn relation_planner_restart_chain_for_nested_plans() -> Result<()> {
+    let context = MockContextProvider {
+        state: MockSessionState::default(),
+    };
+    let planners: Vec<Arc<dyn RelationPlanner<MockContextProvider> + Send + Sync>> =
+        vec![Arc::new(ProxyPlanner), Arc::new(DistinctPlanner)];
+    let planner = SqlToRel::new(&context).with_relation_planners(planners);
+    let statement = DFParser::parse_sql("SELECT * FROM proxy")?
+        .into_iter()
+        .next()
+        .unwrap();
+    let plan = planner.statement_to_plan(statement)?;
+    if let LogicalPlan::Projection(projection) = plan {
+        assert!(matches!(
+            projection.input.as_ref(),
+            LogicalPlan::Distinct(_)
+        ));
+    } else {
+        panic!("expected projection plan");
+    }
+    Ok(())
 }

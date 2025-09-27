@@ -39,6 +39,9 @@ use sqlparser::ast::{DataType as SQLDataType, Ident, ObjectName, TableAlias};
 use crate::utils::make_decimal_type;
 pub use datafusion_expr::planner::ContextProvider;
 
+pub use crate::relation::RelationPlanner;
+use sqlparser::ast::TableFactor;
+
 /// SQL parser options
 #[derive(Debug, Clone, Copy)]
 pub struct ParserOptions {
@@ -337,6 +340,7 @@ pub struct SqlToRel<'a, S: ContextProvider> {
     pub(crate) context_provider: &'a S,
     pub(crate) options: ParserOptions,
     pub(crate) ident_normalizer: IdentNormalizer,
+    relation_planners: Vec<Arc<dyn RelationPlanner<S> + Send + Sync>>,
 }
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -359,7 +363,22 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             context_provider,
             options,
             ident_normalizer: IdentNormalizer::new(ident_normalize),
+            relation_planners: vec![],
         }
+    }
+
+    /// Replace the relation planners used by this [`SqlToRel`].
+    pub fn with_relation_planners(
+        mut self,
+        relation_planners: Vec<Arc<dyn RelationPlanner<S> + Send + Sync>>,
+    ) -> Self {
+        self.relation_planners = relation_planners;
+        self
+    }
+
+    /// Returns the registered relation planners.
+    pub fn relation_planners(&self) -> &[Arc<dyn RelationPlanner<S> + Send + Sync>] {
+        &self.relation_planners
     }
 
     pub fn build_schema(&self, columns: Vec<SQLColumnDef>) -> Result<Schema> {

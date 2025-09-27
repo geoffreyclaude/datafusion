@@ -170,6 +170,81 @@ async fn empty_statement_returns_error() {
 }
 
 #[tokio::test]
+async fn session_relation_planner_registration() -> datafusion::error::Result<()> {
+    use arrow::array::Int64Array;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
+    use datafusion::common::Result;
+    use datafusion::datasource::MemTable;
+    use datafusion::execution::context::{SessionRelationPlanner, SessionSqlToRel};
+    use datafusion::logical_expr::{lit, LogicalPlan, LogicalPlanBuilder};
+    use datafusion::sql::parser::DFParser;
+    use datafusion::sql::planner::PlannerContext;
+    use datafusion::sql::sqlparser::ast::TableFactor;
+    use std::sync::Arc;
+
+    struct SyntheticPlanner;
+
+    impl SessionRelationPlanner for SyntheticPlanner {
+        fn plan_relation<'sql, 'state>(
+            &self,
+            relation: &TableFactor,
+            _sql_to_rel: &SessionSqlToRel<'sql, 'state>,
+            _planner_context: &mut PlannerContext,
+        ) -> Result<Option<LogicalPlan>> {
+            if let TableFactor::Table { name, .. } = relation {
+                if name.to_string() == "synthetic" {
+                    let plan =
+                        LogicalPlanBuilder::values(vec![vec![lit(42_i64)]])?.build()?;
+                    return Ok(Some(plan));
+                }
+            }
+
+            Ok(None)
+        }
+    }
+
+    async fn plan_sql(ctx: &SessionContext, sql: &str) -> Result<LogicalPlan> {
+        let mut statements = DFParser::parse_sql(sql)?;
+        let statement = statements.pop_front().ok_or_else(|| {
+            datafusion::common::DataFusionError::Plan(format!(
+                "SQL string contained no statements: {sql}"
+            ))
+        })?;
+        ctx.state().statement_to_plan(statement).await
+    }
+
+    let ctx = SessionContext::new();
+    ctx.register_relation_planner(Arc::new(SyntheticPlanner));
+
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::Int64,
+        false,
+    )]));
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(Int64Array::from(vec![1_i64, 2, 3]))],
+    )?;
+    let table = MemTable::try_new(schema, vec![vec![batch]])?;
+    ctx.register_table("numbers", Arc::new(table))?;
+
+    let synthetic_plan = plan_sql(&ctx, "SELECT * FROM synthetic").await?;
+    assert!(synthetic_plan
+        .display_indent()
+        .to_string()
+        .contains("Values"));
+
+    let fallback_plan = plan_sql(&ctx, "SELECT * FROM numbers").await?;
+    assert!(fallback_plan
+        .display_indent()
+        .to_string()
+        .contains("TableScan"));
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn multiple_statements_returns_error() {
     let ctx = SessionContext::new();
     ctx.sql("CREATE TABLE test (x int)").await.unwrap();
