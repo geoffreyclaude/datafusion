@@ -51,7 +51,7 @@ use datafusion_functions_nested::make_array::make_array_udf;
 use datafusion_functions_window::{rank::rank_udwf, row_number::row_number_udwf};
 use insta::{allow_duplicates, assert_snapshot};
 use rstest::rstest;
-use sqlparser::ast::TableFactor;
+use sqlparser::ast::{Ident, ObjectName, ObjectNamePart, TableFactor};
 use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
 
 mod cases;
@@ -4937,6 +4937,33 @@ impl RelationPlanner<MockContextProvider> for DefaultOnlyPlanner {
     }
 }
 
+struct ProxyPlanner;
+
+impl RelationPlanner<MockContextProvider> for ProxyPlanner {
+    fn plan_relation(
+        &self,
+        relation: &TableFactor,
+        sql_to_rel: &SqlToRel<'_, MockContextProvider>,
+        delegate: &mut dyn RelationPlannerDelegate<'_, MockContextProvider>,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Option<LogicalPlan>> {
+        if let TableFactor::Table { name, .. } = relation {
+            if name.to_string() == "proxy" {
+                let mut nested_relation = relation.clone();
+                if let TableFactor::Table { name, .. } = &mut nested_relation {
+                    *name = ObjectName(vec![ObjectNamePart::Identifier(Ident::new(
+                        "person",
+                    ))]);
+                }
+                let plan =
+                    sql_to_rel.plan_table_factor(nested_relation, planner_context)?;
+                return Ok(Some(plan));
+            }
+        }
+        delegate.plan_next(relation, planner_context)
+    }
+}
+
 #[test]
 fn relation_planner_override_relation() -> Result<()> {
     let context = MockContextProvider {
@@ -5025,6 +5052,30 @@ fn relation_planner_uses_default_when_no_next() -> Result<()> {
             }
             other => panic!("expected Limit, got {other:?}"),
         }
+    } else {
+        panic!("expected projection plan");
+    }
+    Ok(())
+}
+
+#[test]
+fn relation_planner_restart_chain_for_nested_plans() -> Result<()> {
+    let context = MockContextProvider {
+        state: MockSessionState::default(),
+    };
+    let planners: Vec<Arc<dyn RelationPlanner<MockContextProvider> + Send + Sync>> =
+        vec![Arc::new(ProxyPlanner), Arc::new(DelegatingPlanner)];
+    let planner = SqlToRel::new(&context).with_relation_planners(planners);
+    let statement = DFParser::parse_sql("SELECT * FROM proxy")?
+        .into_iter()
+        .next()
+        .unwrap();
+    let plan = planner.statement_to_plan(statement)?;
+    if let LogicalPlan::Projection(projection) = plan {
+        assert!(matches!(
+            projection.input.as_ref(),
+            LogicalPlan::Distinct(_)
+        ));
     } else {
         panic!("expected projection plan");
     }

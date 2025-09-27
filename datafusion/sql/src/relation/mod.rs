@@ -59,6 +59,20 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         self.plan_relation_with_extensions(&relation, planner_context)
     }
 
+    /// Public entry point for extension authors to plan a [`TableFactor`]
+    /// using the currently registered relation planners.
+    ///
+    /// Unlike [`RelationPlannerDelegate::plan_next`], this method always
+    /// restarts planning from the beginning of the planner chain, ensuring
+    /// nested relations see the same custom planners as top-level relations.
+    pub fn plan_table_factor(
+        &self,
+        relation: TableFactor,
+        planner_context: &mut PlannerContext,
+    ) -> Result<LogicalPlan> {
+        self.create_relation(relation, planner_context)
+    }
+
     fn plan_relation_with_extensions(
         &self,
         relation: &TableFactor,
