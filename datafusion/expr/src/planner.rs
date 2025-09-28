@@ -21,6 +21,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use crate::expr::NullTreatment;
+use crate::logical_plan::LogicalPlan;
 use crate::{
     AggregateUDF, Expr, GetFieldAccess, ScalarUDF, SortExpr, TableSource, WindowFrame,
     WindowFunctionDefinition, WindowUDF,
@@ -30,6 +31,8 @@ use datafusion_common::{
     config::ConfigOptions, file_options::file_type::FileType, not_impl_err, DFSchema,
     Result, TableReference,
 };
+#[cfg(feature = "sql")]
+use sqlparser::ast::{Expr as SQLExpr, Ident, ObjectName, TableFactor};
 
 /// Provides the `SQL` query planner meta-data about tables and
 /// functions referenced in SQL statements, without a direct dependency on the
@@ -80,6 +83,12 @@ pub trait ContextProvider {
 
     /// Return [`ExprPlanner`] extensions for planning expressions
     fn get_expr_planners(&self) -> &[Arc<dyn ExprPlanner>] {
+        &[]
+    }
+
+    /// Return [`RelationPlanner`] extensions for planning table factors
+    #[cfg(feature = "sql")]
+    fn get_relation_planners(&self) -> &[Arc<dyn RelationPlanner>] {
         &[]
     }
 
@@ -322,6 +331,116 @@ pub enum PlannerResult<T> {
     Planned(Expr),
     /// The raw expression could not be planned, and is returned unmodified
     Original(T),
+}
+
+/// Customize planning SQL table factors to [`LogicalPlan`]s.
+#[cfg(feature = "sql")]
+pub trait RelationPlanner: Debug + Send + Sync {
+    /// Plan a table factor into a [`LogicalPlan`].
+    ///
+    /// Returning `Ok(Some(plan))` short-circuits further planning and uses the
+    /// provided plan. Returning `Ok(None)` allows the next registered planner,
+    /// or DataFusion's default logic, to handle the relation.
+    fn plan_relation(
+        &self,
+        relation: &TableFactor,
+        context: &mut RelationPlannerContext<'_>,
+    ) -> Result<Option<LogicalPlan>>;
+}
+
+/// Internal interface used by [`RelationPlannerContext`] to delegate to the
+/// core SQL planner.
+#[cfg(feature = "sql")]
+pub trait RelationPlannerDelegate {
+    /// Plans the specified relation using DataFusion's default logic.
+    fn plan_default(&mut self, relation: TableFactor) -> Result<LogicalPlan>;
+
+    /// Plans the specified relation starting from the first registered planner.
+    fn plan_relation(&mut self, relation: TableFactor) -> Result<LogicalPlan>;
+
+    /// Plans the specified relation using the remaining registered planners.
+    ///
+    /// Returns `Ok(Some(plan))` if a later planner handles the relation, or
+    /// `Ok(None)` if no planners accept it.
+    fn plan_next(&mut self, relation: TableFactor) -> Result<Option<LogicalPlan>>;
+
+    /// Converts a SQL expression to a logical expression using the current
+    /// planner context.
+    fn sql_to_expr(&mut self, expr: SQLExpr, schema: &DFSchema) -> Result<Expr>;
+
+    /// Converts a SQL expression to a logical expression without applying
+    /// DataFusion-specific rewrites.
+    fn sql_expr_to_logical_expr(
+        &mut self,
+        expr: SQLExpr,
+        schema: &DFSchema,
+    ) -> Result<Expr>;
+
+    /// Normalizes the specified identifier according to session settings.
+    fn normalize_ident(&self, ident: Ident) -> String;
+
+    /// Normalizes a SQL object name into a [`TableReference`].
+    fn object_name_to_table_reference(&self, name: ObjectName) -> Result<TableReference>;
+}
+
+/// Provides utilities for relation planners to interact with DataFusion's SQL
+/// planner.
+#[cfg(feature = "sql")]
+pub struct RelationPlannerContext<'a> {
+    delegate: &'a mut dyn RelationPlannerDelegate,
+}
+
+#[cfg(feature = "sql")]
+impl<'a> RelationPlannerContext<'a> {
+    /// Creates a new context backed by the specified delegate.
+    pub fn new(delegate: &'a mut dyn RelationPlannerDelegate) -> Self {
+        Self { delegate }
+    }
+
+    /// Returns a plan produced by DataFusion's default relation planner.
+    pub fn plan_default(&mut self, relation: TableFactor) -> Result<LogicalPlan> {
+        self.delegate.plan_default(relation)
+    }
+
+    /// Plans the specified relation, restarting the planner pipeline from the
+    /// first registered relation planner.
+    pub fn plan_relation(&mut self, relation: TableFactor) -> Result<LogicalPlan> {
+        self.delegate.plan_relation(relation)
+    }
+
+    /// Delegates planning to the remaining registered relation planners.
+    pub fn plan_next(&mut self, relation: TableFactor) -> Result<Option<LogicalPlan>> {
+        self.delegate.plan_next(relation)
+    }
+
+    /// Converts a SQL expression into a logical expression using the current
+    /// planner context.
+    pub fn sql_to_expr(&mut self, expr: SQLExpr, schema: &DFSchema) -> Result<Expr> {
+        self.delegate.sql_to_expr(expr, schema)
+    }
+
+    /// Converts a SQL expression into a logical expression without DataFusion
+    /// rewrites.
+    pub fn sql_expr_to_logical_expr(
+        &mut self,
+        expr: SQLExpr,
+        schema: &DFSchema,
+    ) -> Result<Expr> {
+        self.delegate.sql_expr_to_logical_expr(expr, schema)
+    }
+
+    /// Normalizes an identifier according to session settings.
+    pub fn normalize_ident(&self, ident: Ident) -> String {
+        self.delegate.normalize_ident(ident)
+    }
+
+    /// Normalizes a SQL object name into a [`TableReference`].
+    pub fn object_name_to_table_reference(
+        &self,
+        name: ObjectName,
+    ) -> Result<TableReference> {
+        self.delegate.object_name_to_table_reference(name)
+    }
 }
 
 /// Customize planning SQL types to DataFusion (Arrow) types.

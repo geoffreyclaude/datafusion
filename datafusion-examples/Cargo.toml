@@ -56,6 +56,22 @@ path = "examples/external_dependency/query-aws-s3.rs"
 name = "custom_file_casts"
 path = "examples/custom_file_casts.rs"
 
+[[example]]
+name = "relation_planner_basic"
+path = "examples/relation_planner/basic.rs"
+
+[[example]]
+name = "relation_planner_layered"
+path = "examples/relation_planner/layered.rs"
+
+[[example]]
+name = "relation_planner_join_override"
+path = "examples/relation_planner/join_override.rs"
+
+[[example]]
+name = "relation_planner_match_recognize"
+path = "examples/relation_planner/match_recognize.rs"
+
 [dev-dependencies]
 arrow = { workspace = true }
 # arrow_schema is required for record_batch! macro :sad:
