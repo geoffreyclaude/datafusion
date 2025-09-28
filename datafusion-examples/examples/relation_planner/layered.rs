@@ -87,6 +87,8 @@ async fn main() -> Result<()> {
     ctx.register_relation_planner(Arc::new(Wrapper))?;
 
     let df = ctx.sql("SELECT * FROM shared").await?;
+    let plan = df.clone().into_unoptimized_plan();
+    println!("Logical Plan:\n{}", plan.display_indent());
     df.show().await?;
 
     Ok(())

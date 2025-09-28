@@ -56,6 +56,8 @@ async fn main() -> Result<()> {
     ctx.register_relation_planner(Arc::new(SyntheticValues))?;
 
     let df = ctx.sql("SELECT * FROM synthetic_values").await?;
+    let plan = df.clone().into_unoptimized_plan();
+    println!("Logical Plan:\n{}", plan.display_indent());
     df.show().await?;
 
     Ok(())

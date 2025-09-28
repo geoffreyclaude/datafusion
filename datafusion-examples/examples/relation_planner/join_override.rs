@@ -89,6 +89,8 @@ async fn main() -> Result<()> {
     let df = ctx
         .sql("SELECT * FROM left_source AS l JOIN right_source AS r ON l.column1 = r.column1")
         .await?;
+    let plan = df.clone().into_unoptimized_plan();
+    println!("Logical Plan:\n{}", plan.display_indent());
     df.show().await?;
 
     Ok(())

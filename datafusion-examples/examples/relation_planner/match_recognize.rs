@@ -170,7 +170,7 @@ async fn main() -> Result<()> {
         .await?
         .into_unoptimized_plan();
 
-    println!("{}", plan.display_indent());
+    println!("Logical Plan:\n{}", plan.display_indent());
 
     Ok(())
 }
