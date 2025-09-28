@@ -16,16 +16,19 @@
 // under the License.
 
 use std::any::Any;
+use std::cmp::Ordering;
 use std::sync::Arc;
 
 use datafusion::prelude::*;
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{DFSchemaRef, DataFusionError, Result, ScalarValue};
 use datafusion_expr::logical_plan::{
-    builder::LogicalPlanBuilder, Extension, LogicalPlan,
+    builder::LogicalPlanBuilder, Extension, InvariantLevel, LogicalPlan,
 };
 use datafusion_expr::planner::{RelationPlanner, RelationPlannerContext};
-use datafusion_expr::{DFSchemaRef, Expr, UserDefinedLogicalNode};
+use datafusion_expr::{Expr, UserDefinedLogicalNode};
 use datafusion_sql::sqlparser::ast::TableFactor;
+
+use std::hash::Hasher;
 
 #[derive(Debug)]
 struct MiniMatchRecognizeNode {
@@ -50,6 +53,10 @@ impl UserDefinedLogicalNode for MiniMatchRecognizeNode {
         &self.schema
     }
 
+    fn check_invariants(&self, _check: InvariantLevel) -> Result<()> {
+        Ok(())
+    }
+
     fn expressions(&self) -> Vec<Expr> {
         vec![]
     }
@@ -58,15 +65,47 @@ impl UserDefinedLogicalNode for MiniMatchRecognizeNode {
         write!(f, "MiniMatchRecognize")
     }
 
-    fn from_template(
+    fn with_exprs_and_inputs(
         &self,
-        inputs: &[LogicalPlan],
-        _exprs: &[Expr],
-    ) -> Arc<dyn UserDefinedLogicalNode> {
-        Arc::new(Self {
-            input: Arc::new(inputs[0].clone()),
+        exprs: Vec<Expr>,
+        inputs: Vec<LogicalPlan>,
+    ) -> Result<Arc<dyn UserDefinedLogicalNode>> {
+        if !exprs.is_empty() {
+            return Err(DataFusionError::Internal(
+                "MiniMatchRecognize does not support expressions".into(),
+            ));
+        }
+
+        let Some(first_input) = inputs.into_iter().next() else {
+            return Err(DataFusionError::Internal(
+                "MiniMatchRecognize requires a single input".into(),
+            ));
+        };
+
+        Ok(Arc::new(Self {
+            input: Arc::new(first_input),
             schema: Arc::clone(&self.schema),
-        })
+        }))
+    }
+
+    fn dyn_hash(&self, state: &mut dyn Hasher) {
+        state.write_usize(Arc::as_ptr(&self.input) as usize);
+    }
+
+    fn dyn_eq(&self, other: &dyn UserDefinedLogicalNode) -> bool {
+        other
+            .as_any()
+            .downcast_ref::<Self>()
+            .map(|o| Arc::ptr_eq(&self.input, &o.input))
+            .unwrap_or(false)
+    }
+
+    fn dyn_ord(&self, other: &dyn UserDefinedLogicalNode) -> Option<Ordering> {
+        if self.dyn_eq(other) {
+            Some(Ordering::Equal)
+        } else {
+            None
+        }
     }
 }
 
@@ -120,16 +159,16 @@ impl RelationPlanner for ValuesPlanner {
 }
 
 #[tokio::main]
-async fn main() -> datafusion::error::Result<()> {
+async fn main() -> Result<()> {
     let ctx = SessionContext::new();
     ctx.register_relation_planner(Arc::new(ValuesPlanner))?;
     ctx.register_relation_planner(Arc::new(MatchRecognizePlanner))?;
 
     // The query will not execute, but we can still inspect the logical plan
     let plan = ctx
-        .sql("SELECT * FROM MATCH_RECOGNIZE (PARTITION BY 1 MEASURES 1 AS x ONE ROW PER MATCH AFTER MATCH SKIP PAST LAST ROW PATTERN (A) DEFINE A AS true) AS t")
+        .sql("SELECT * FROM events MATCH_RECOGNIZE (PARTITION BY 1 MEASURES 1 AS x PATTERN (A) DEFINE A AS true) AS t")
         .await?
-        .to_logical_plan();
+        .into_unoptimized_plan();
 
     println!("{}", plan.display_indent());
 

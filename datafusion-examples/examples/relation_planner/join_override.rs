@@ -81,7 +81,7 @@ impl RelationPlanner for CrossJoinPlanner {
 }
 
 #[tokio::main]
-async fn main() -> datafusion::error::Result<()> {
+async fn main() -> Result<()> {
     let ctx = SessionContext::new();
     ctx.register_relation_planner(Arc::new(FixtureTables))?;
     ctx.register_relation_planner(Arc::new(CrossJoinPlanner))?;

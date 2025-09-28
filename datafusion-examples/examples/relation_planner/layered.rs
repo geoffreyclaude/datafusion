@@ -81,7 +81,7 @@ impl RelationPlanner for Wrapper {
 }
 
 #[tokio::main]
-async fn main() -> datafusion::error::Result<()> {
+async fn main() -> Result<()> {
     let ctx = SessionContext::new();
     ctx.register_relation_planner(Arc::new(BaseValues))?;
     ctx.register_relation_planner(Arc::new(Wrapper))?;

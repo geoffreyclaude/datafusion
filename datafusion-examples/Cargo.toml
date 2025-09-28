@@ -83,7 +83,10 @@ dashmap = { workspace = true }
 # note only use main datafusion crate for examples
 base64 = "0.22.1"
 datafusion = { workspace = true, default-features = true, features = ["parquet_encryption"] }
+datafusion-common = { workspace = true }
 datafusion-ffi = { workspace = true }
+datafusion-expr = { workspace = true }
+datafusion-sql = { workspace = true }
 datafusion-physical-expr-adapter = { workspace = true }
 datafusion-proto = { workspace = true }
 env_logger = { workspace = true }
