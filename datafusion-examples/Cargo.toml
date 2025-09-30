@@ -56,6 +56,26 @@ path = "examples/external_dependency/query-aws-s3.rs"
 name = "custom_file_casts"
 path = "examples/custom_file_casts.rs"
 
+[[example]]
+name = "relation_planner_csv_virtual_tables"
+path = "examples/relation_planner/csv_virtual_tables.rs"
+
+[[example]]
+name = "relation_planner_generate_series"
+path = "examples/relation_planner/generate_series.rs"
+
+[[example]]
+name = "relation_planner_table_functions"
+path = "examples/relation_planner/table_functions.rs"
+
+[[example]]
+name = "relation_planner_table_sample"
+path = "examples/relation_planner/table_sample.rs"
+
+[[example]]
+name = "relation_planner_match_recognize"
+path = "examples/relation_planner/match_recognize.rs"
+
 [dev-dependencies]
 arrow = { workspace = true }
 # arrow_schema is required for record_batch! macro :sad:
@@ -67,9 +87,12 @@ dashmap = { workspace = true }
 # note only use main datafusion crate for examples
 base64 = "0.22.1"
 datafusion = { workspace = true, default-features = true, features = ["parquet_encryption"] }
+datafusion-common = { workspace = true }
+datafusion-expr = { workspace = true }
 datafusion-ffi = { workspace = true }
 datafusion-physical-expr-adapter = { workspace = true }
 datafusion-proto = { workspace = true }
+datafusion-sql = { workspace = true }
 env_logger = { workspace = true }
 futures = { workspace = true }
 log = { workspace = true }
@@ -77,6 +100,7 @@ mimalloc = { version = "0.1", default-features = false }
 object_store = { workspace = true, features = ["aws", "http"] }
 prost = { workspace = true }
 rand = { workspace = true }
+rand_distr = "0.5"
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 test-utils = { path = "../test-utils" }
