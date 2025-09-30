@@ -32,7 +32,7 @@ impl RelationPlanner for SyntheticValues {
     fn plan_relation(
         &self,
         relation: &TableFactor,
-        _context: &mut RelationPlannerContext<'_>,
+        _context: &mut dyn RelationPlannerContext,
     ) -> Result<Option<LogicalPlan>> {
         if let TableFactor::Table { name, .. } = relation {
             if name.to_string().eq_ignore_ascii_case("synthetic_values") {

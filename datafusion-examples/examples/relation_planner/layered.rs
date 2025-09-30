@@ -33,7 +33,7 @@ impl RelationPlanner for BaseValues {
     fn plan_relation(
         &self,
         relation: &TableFactor,
-        _context: &mut RelationPlannerContext<'_>,
+        _context: &mut dyn RelationPlannerContext,
     ) -> Result<Option<LogicalPlan>> {
         if let TableFactor::Table { name, .. } = relation {
             if name.to_string().eq_ignore_ascii_case("shared") {
@@ -57,11 +57,11 @@ impl RelationPlanner for Wrapper {
     fn plan_relation(
         &self,
         relation: &TableFactor,
-        context: &mut RelationPlannerContext<'_>,
+        context: &mut dyn RelationPlannerContext,
     ) -> Result<Option<LogicalPlan>> {
         if let TableFactor::Table { name, .. } = relation {
             if name.to_string().eq_ignore_ascii_case("shared") {
-                if let Some(inner) = context.plan_next(relation.clone())? {
+                if let Some(inner) = context.plan_next(relation)? {
                     let plan = LogicalPlanBuilder::from(inner)
                         .project(vec![
                             col("column1"),

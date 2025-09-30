@@ -32,7 +32,7 @@ impl RelationPlanner for FixtureTables {
     fn plan_relation(
         &self,
         relation: &TableFactor,
-        _context: &mut RelationPlannerContext<'_>,
+        _context: &mut dyn RelationPlannerContext,
     ) -> Result<Option<LogicalPlan>> {
         if let TableFactor::Table { name, .. } = relation {
             let values = match name.to_string().to_lowercase().as_str() {
@@ -60,7 +60,7 @@ impl RelationPlanner for CrossJoinPlanner {
     fn plan_relation(
         &self,
         relation: &TableFactor,
-        context: &mut RelationPlannerContext<'_>,
+        context: &mut dyn RelationPlannerContext,
     ) -> Result<Option<LogicalPlan>> {
         if let TableFactor::NestedJoin {
             table_with_joins, ..
@@ -69,9 +69,8 @@ impl RelationPlanner for CrossJoinPlanner {
             if table_with_joins.joins.len() != 1 {
                 return Ok(None);
             }
-            let left = context.plan_relation(table_with_joins.relation.clone())?;
-            let right =
-                context.plan_relation(table_with_joins.joins[0].relation.clone())?;
+            let left = context.plan_relation(&table_with_joins.relation)?;
+            let right = context.plan_relation(&table_with_joins.joins[0].relation)?;
             let plan = LogicalPlanBuilder::from(left).cross_join(right)?.build()?;
             return Ok(Some(plan));
         }

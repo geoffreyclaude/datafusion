@@ -24,7 +24,7 @@ use datafusion_common::{
     not_impl_err, plan_err, DFSchema, Diagnostic, Result, Span, Spans, TableReference,
 };
 use datafusion_expr::builder::subquery_alias;
-use datafusion_expr::planner::{RelationPlannerContext, RelationPlannerDelegate};
+use datafusion_expr::planner::RelationPlannerContext;
 use datafusion_expr::{expr::Unnest, Expr, LogicalPlan, LogicalPlanBuilder};
 use datafusion_expr::{Subquery, SubqueryAlias};
 use sqlparser::ast::TableAlias;
@@ -44,31 +44,31 @@ fn relation_alias(relation: &TableFactor) -> Option<TableAlias> {
     }
 }
 
-struct SqlToRelRelationDelegate<'a, 'b, S: ContextProvider> {
+struct SqlToRelRelationContext<'a, 'b, S: ContextProvider> {
     planner: &'a SqlToRel<'b, S>,
     planner_context: &'a mut PlannerContext,
     next_index: usize,
 }
 
-impl<'a, 'b, S: ContextProvider> RelationPlannerDelegate
-    for SqlToRelRelationDelegate<'a, 'b, S>
+impl<'a, 'b, S: ContextProvider> RelationPlannerContext
+    for SqlToRelRelationContext<'a, 'b, S>
 {
-    fn plan_default(&mut self, relation: TableFactor) -> Result<LogicalPlan> {
+    fn plan_default(&mut self, relation: &TableFactor) -> Result<LogicalPlan> {
         self.planner.create_relation_default_with_alias(
-            relation,
+            relation.clone(),
             self.planner_context,
             None,
         )
     }
 
-    fn plan_relation(&mut self, relation: TableFactor) -> Result<LogicalPlan> {
+    fn plan_relation(&mut self, relation: &TableFactor) -> Result<LogicalPlan> {
         self.planner
-            .create_relation_internal(relation, self.planner_context, 0)
+            .create_relation_internal(relation.clone(), self.planner_context, 0)
     }
 
-    fn plan_next(&mut self, relation: TableFactor) -> Result<Option<LogicalPlan>> {
+    fn plan_next(&mut self, relation: &TableFactor) -> Result<Option<LogicalPlan>> {
         self.planner.try_plan_relation_with_extensions(
-            &relation,
+            relation,
             self.planner_context,
             self.next_index,
             relation_alias(&relation),
@@ -147,12 +147,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         let mut index = start_index;
         while let Some(planner) = planners.get(index) {
-            let mut delegate = SqlToRelRelationDelegate {
+            let mut context = SqlToRelRelationContext {
                 planner: self,
                 planner_context,
                 next_index: index + 1,
             };
-            let mut context = RelationPlannerContext::new(&mut delegate);
             if let Some(plan) = planner.plan_relation(relation, &mut context)? {
                 return self.finalize_relation_plan(plan, alias.clone()).map(Some);
             }

@@ -36,7 +36,7 @@ impl RelationPlanner for ValuesRelationPlanner {
     fn plan_relation(
         &self,
         relation: &TableFactor,
-        _context: &mut RelationPlannerContext<'_>,
+        _context: &mut dyn RelationPlannerContext,
     ) -> Result<Option<LogicalPlan>> {
         if let TableFactor::Table { name, .. } = relation {
             if name.to_string().eq_ignore_ascii_case("custom_values") {
@@ -67,16 +67,16 @@ impl RelationPlanner for DelegatingPlanner {
     fn plan_relation(
         &self,
         relation: &TableFactor,
-        context: &mut RelationPlannerContext<'_>,
+        context: &mut dyn RelationPlannerContext,
     ) -> Result<Option<LogicalPlan>> {
         self.seen.lock().unwrap().push(format!("{relation:?}"));
 
         match relation {
             TableFactor::Table { .. } => {
-                let table_plan = context.plan_default(relation.clone())?;
+                let table_plan = context.plan_default(relation)?;
                 Ok(Some(table_plan))
             }
-            _ => Ok(context.plan_next(relation.clone())?),
+            _ => Ok(context.plan_next(relation)?),
         }
     }
 }
@@ -88,7 +88,7 @@ impl RelationPlanner for JoinPlanner {
     fn plan_relation(
         &self,
         relation: &TableFactor,
-        context: &mut RelationPlannerContext<'_>,
+        context: &mut dyn RelationPlannerContext,
     ) -> Result<Option<LogicalPlan>> {
         if let TableFactor::NestedJoin {
             table_with_joins, ..
@@ -97,9 +97,8 @@ impl RelationPlanner for JoinPlanner {
             if table_with_joins.joins.len() != 1 {
                 return Ok(None);
             }
-            let left = context.plan_relation(table_with_joins.relation.clone())?;
-            let right =
-                context.plan_relation(table_with_joins.joins[0].relation.clone())?;
+            let left = context.plan_relation(&table_with_joins.relation)?;
+            let right = context.plan_relation(&table_with_joins.joins[0].relation)?;
             let plan = LogicalPlanBuilder::from(left).cross_join(right)?.build()?;
             Ok(Some(plan))
         } else {

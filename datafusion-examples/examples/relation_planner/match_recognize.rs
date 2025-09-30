@@ -171,7 +171,7 @@ impl RelationPlanner for MatchRecognizePlanner {
     fn plan_relation(
         &self,
         relation: &TableFactor,
-        context: &mut RelationPlannerContext<'_>,
+        context: &mut dyn RelationPlannerContext,
     ) -> Result<Option<LogicalPlan>> {
         if let TableFactor::MatchRecognize {
             table,
@@ -180,7 +180,7 @@ impl RelationPlanner for MatchRecognizePlanner {
             ..
         } = relation
         {
-            let input = context.plan_relation(*table.clone())?;
+            let input = context.plan_relation(table)?;
             let input_schema = input.schema().clone();
 
             let planned_measures = measures
@@ -226,7 +226,7 @@ impl RelationPlanner for ValuesPlanner {
     fn plan_relation(
         &self,
         relation: &TableFactor,
-        _context: &mut RelationPlannerContext<'_>,
+        _context: &mut dyn RelationPlannerContext,
     ) -> Result<Option<LogicalPlan>> {
         if let TableFactor::Table { name, .. } = relation {
             if name.to_string().eq_ignore_ascii_case("events") {
