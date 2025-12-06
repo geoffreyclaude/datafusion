@@ -100,7 +100,6 @@ use futures::{
     stream::{Stream, StreamExt},
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
-use rand_distr::{Distribution, Poisson};
 use tonic::async_trait;
 
 use datafusion::{
@@ -275,30 +274,6 @@ async fn run_examples(ctx: &SessionContext) -> Result<()> {
     +---------+---------+---------+---------+
     ");
 
-    // Example 7: Poisson sampling (with replacement)
-    //
-    // Poisson sampling is useful for bootstrap-style analysis where rows can
-    // appear multiple times. Each row is included K times where K ~ Poisson(ratio).
-    //
-    // There's no SQL syntax for this yet, so we demonstrate the programmatic API:
-    // `SampleExec::try_new_with_options(..., with_replacement=true)`
-    //
-    // Notice row 7 appears twice in the output—that's the "with replacement" effect.
-    let results = run_poisson_example(ctx).await?;
-    assert_snapshot!(results, @r"
-    +---------+---------+
-    | column1 | column2 |
-    +---------+---------+
-    | 1       | row_1   |
-    | 2       | row_2   |
-    | 4       | row_4   |
-    | 5       | row_5   |
-    | 7       | row_7   |
-    | 7       | row_7   |
-    | 9       | row_9   |
-    +---------+---------+
-    ");
-
     Ok(())
 }
 
@@ -309,36 +284,6 @@ async fn run_example(ctx: &SessionContext, title: &str, sql: &str) -> Result<Str
     println!("{}\n", df.logical_plan().display_indent());
 
     let batches = df.collect().await?;
-    let results = arrow::util::pretty::pretty_format_batches(&batches)?.to_string();
-    println!("{results}\n");
-
-    Ok(results)
-}
-
-/// Runs Example 7: Poisson sampling via `SampleExec::try_new_with_options`.
-async fn run_poisson_example(ctx: &SessionContext) -> Result<String> {
-    use datafusion::physical_plan::{collect, displayable};
-
-    println!("Example 7: Poisson sampling (with replacement):\n");
-    println!("API: SampleExec::try_new_with_options(input, 0.0, 1.0, seed=42, with_replacement=true)\n");
-
-    // Get the physical plan for the base table
-    let df = ctx.sql("SELECT * FROM sample_data").await?;
-    let input = df.create_physical_plan().await?;
-
-    // Create SampleExec with Poisson sampling (with_replacement=true)
-    // ratio=1.0 means on average each row appears once, but can appear 0, 1, 2, ... times
-    let sample_exec: Arc<dyn ExecutionPlan> = Arc::new(SampleExec::try_new_with_options(
-        input, 0.0,  // lower_bound
-        1.0,  // upper_bound (ratio=1.0)
-        42,   // seed for reproducibility
-        true, // with_replacement (Poisson)
-    )?);
-
-    println!("{}\n", displayable(sample_exec.as_ref()).indent(false));
-
-    // Execute
-    let batches = collect(Arc::clone(&sample_exec), ctx.task_ctx()).await?;
     let results = arrow::util::pretty::pretty_format_batches(&batches)?.to_string();
     println!("{results}\n");
 
@@ -685,25 +630,19 @@ impl ExtensionPlanner for TableSampleExtensionPlanner {
 }
 
 // ============================================================================
-// Physical Execution: SampleExec + Samplers
+// Physical Execution: SampleExec + BernoulliSampler
 // ============================================================================
 
-/// Physical execution plan that samples rows from its input.
+/// Physical execution plan that samples rows from its input using Bernoulli sampling.
 ///
-/// Supports two sampling strategies:
-/// - **Bernoulli** (without replacement): each row is independently selected with
-///   probability `(upper_bound - lower_bound)`. Rows appear at most once.
-/// - **Poisson** (with replacement): each row appears K times where K ~ Poisson(ratio).
-///   Useful for bootstrap sampling.
+/// Each row is independently selected with probability `(upper_bound - lower_bound)`
+/// and appears at most once.
 #[derive(Debug, Clone)]
 pub struct SampleExec {
     input: Arc<dyn ExecutionPlan>,
     lower_bound: f64,
     upper_bound: f64,
     seed: u64,
-    /// If true, use Poisson sampling (with replacement).
-    /// If false, use Bernoulli sampling (without replacement).
-    with_replacement: bool,
     metrics: ExecutionPlanMetricsSet,
     cache: PlanProperties,
 }
@@ -721,24 +660,6 @@ impl SampleExec {
         lower_bound: f64,
         upper_bound: f64,
         seed: u64,
-    ) -> Result<Self> {
-        Self::try_new_with_options(input, lower_bound, upper_bound, seed, false)
-    }
-
-    /// Create a new SampleExec with configurable sampling strategy.
-    ///
-    /// # Arguments
-    /// * `input` - The input execution plan
-    /// * `lower_bound` - Lower bound of sampling range (typically 0.0)
-    /// * `upper_bound` - Upper bound of sampling range (0.0 to 1.0)
-    /// * `seed` - Random seed for reproducible sampling
-    /// * `with_replacement` - If true, use Poisson sampling; if false, use Bernoulli
-    pub fn try_new_with_options(
-        input: Arc<dyn ExecutionPlan>,
-        lower_bound: f64,
-        upper_bound: f64,
-        seed: u64,
-        with_replacement: bool,
     ) -> Result<Self> {
         if lower_bound < 0.0 || upper_bound > 1.0 || lower_bound > upper_bound {
             return internal_err!(
@@ -760,27 +681,15 @@ impl SampleExec {
             lower_bound,
             upper_bound,
             seed,
-            with_replacement,
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
         })
     }
 
     /// Create a sampler for the given partition.
-    fn create_sampler(&self, partition: usize) -> Result<Box<dyn Sampler>> {
+    fn create_sampler(&self, partition: usize) -> BernoulliSampler {
         let seed = self.seed.wrapping_add(partition as u64);
-        if self.with_replacement {
-            Ok(Box::new(PoissonSampler::try_new(
-                self.upper_bound - self.lower_bound,
-                seed,
-            )?))
-        } else {
-            Ok(Box::new(BernoulliSampler::new(
-                self.lower_bound,
-                self.upper_bound,
-                seed,
-            )))
-        }
+        BernoulliSampler::new(self.lower_bound, self.upper_bound, seed)
     }
 }
 
@@ -788,8 +697,8 @@ impl DisplayAs for SampleExec {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
         write!(
             f,
-            "SampleExec: bounds=[{}, {}], seed={}, with_replacement={}",
-            self.lower_bound, self.upper_bound, self.seed, self.with_replacement
+            "SampleExec: bounds=[{}, {}], seed={}",
+            self.lower_bound, self.upper_bound, self.seed
         )
     }
 }
@@ -820,12 +729,11 @@ impl ExecutionPlan for SampleExec {
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(Self::try_new_with_options(
+        Ok(Arc::new(Self::try_new(
             children.swap_remove(0),
             self.lower_bound,
             self.upper_bound,
             self.seed,
-            self.with_replacement,
         )?))
     }
 
@@ -836,7 +744,7 @@ impl ExecutionPlan for SampleExec {
     ) -> Result<SendableRecordBatchStream> {
         Ok(Box::pin(SampleStream {
             input: self.input.execute(partition, context)?,
-            sampler: self.create_sampler(partition)?,
+            sampler: self.create_sampler(partition),
             metrics: BaselineMetrics::new(&self.metrics, partition),
         }))
     }
@@ -863,11 +771,6 @@ impl ExecutionPlan for SampleExec {
     }
 }
 
-/// Trait for sampling strategies.
-trait Sampler: Send {
-    fn sample(&mut self, batch: &RecordBatch) -> Result<RecordBatch>;
-}
-
 /// Bernoulli sampler: includes each row with probability `(upper - lower)`.
 /// This is sampling **without replacement** - each row appears at most once.
 struct BernoulliSampler {
@@ -884,9 +787,7 @@ impl BernoulliSampler {
             rng: StdRng::seed_from_u64(seed),
         }
     }
-}
 
-impl Sampler for BernoulliSampler {
     fn sample(&mut self, batch: &RecordBatch) -> Result<RecordBatch> {
         let range = self.upper_bound - self.lower_bound;
         if range <= 0.0 {
@@ -911,55 +812,10 @@ impl Sampler for BernoulliSampler {
     }
 }
 
-/// Poisson sampler: includes each row K times where K ~ Poisson(ratio).
-/// This is sampling **with replacement** - rows can appear multiple times.
-/// Useful for bootstrap sampling and statistical applications.
-struct PoissonSampler {
-    ratio: f64,
-    poisson: Poisson<f64>,
-    rng: StdRng,
-}
-
-impl PoissonSampler {
-    fn try_new(ratio: f64, seed: u64) -> Result<Self> {
-        let poisson = Poisson::new(ratio)
-            .map_err(|e| plan_datafusion_err!("Invalid Poisson parameter: {}", e))?;
-        Ok(Self {
-            ratio,
-            poisson,
-            rng: StdRng::seed_from_u64(seed),
-        })
-    }
-}
-
-impl Sampler for PoissonSampler {
-    fn sample(&mut self, batch: &RecordBatch) -> Result<RecordBatch> {
-        if self.ratio <= 0.0 {
-            return Ok(RecordBatch::new_empty(batch.schema()));
-        }
-
-        // Each row is included K times where K ~ Poisson(ratio)
-        let mut indices = Vec::new();
-        for i in 0..batch.num_rows() {
-            let k = self.poisson.sample(&mut self.rng) as usize;
-            for _ in 0..k {
-                indices.push(i as u32);
-            }
-        }
-
-        if indices.is_empty() {
-            return Ok(RecordBatch::new_empty(batch.schema()));
-        }
-
-        compute::take_record_batch(batch, &UInt32Array::from(indices))
-            .map_err(DataFusionError::from)
-    }
-}
-
 /// Stream adapter that applies sampling to each batch.
 struct SampleStream {
     input: SendableRecordBatchStream,
-    sampler: Box<dyn Sampler>,
+    sampler: BernoulliSampler,
     metrics: BaselineMetrics,
 }
 
