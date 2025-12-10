@@ -26,9 +26,9 @@ where
     F: Fn(usize) -> T + Copy,
 {
     let mut group = c.benchmark_group(format!("{type_name}_slice_search"));
-    group.measurement_time(Duration::from_secs(2));
-    group.sample_size(50);
-    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_millis(200));
+    group.sample_size(20);
+    group.warm_up_time(Duration::from_millis(100));
 
     for &len in &LENGTHS {
         let (data_vec, target_value) = generate_numeric_even(len, to_type);
@@ -60,9 +60,9 @@ where
 
 fn bench_strings(c: &mut Criterion) {
     let mut group = c.benchmark_group("str_slice_search");
-    group.measurement_time(Duration::from_secs(2));
-    group.sample_size(50);
-    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_millis(200));
+    group.sample_size(20);
+    group.warm_up_time(Duration::from_millis(100));
 
     for &len in &LENGTHS {
         let (data_vec, target_value) = generate_even_strings(len);

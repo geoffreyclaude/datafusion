@@ -1,12 +1,13 @@
 # Slice search benchmark analysis
 
 ## Setup
-- Benchmarks live in a dedicated `slice-search-bench` crate that only depends on Criterion, keeping compile times small. Each benchmark group measures `contains` and `binary_search` across power-of-two lengths from 1 to 1024 for `i32`, `i64`, and `String` data. Measurement time is 2s with 50 samples and a 1s warmup to balance stability and runtime.【F:benchmarks/slice-search/benches/slice_search.rs†L23-L101】
-- Data generators create even-numbered sequences with a missing midpoint value so the target is absent and sits between the central elements, driving binary search down its deepest path.【F:benchmarks/slice-search/src/lib.rs†L18-L46】
+- Benchmarks live in a dedicated `slice-search-bench` crate that only depends on Criterion. Each benchmark group measures `contains` and `binary_search` across a length set that is dense below 32 (1, 2, 4, 8, 12, 16, 24, 32) and continues with powers of two up to 1024 for `i32`, `i64`, and `String` data.【F:benchmarks/slice-search/src/lib.rs†L18-L49】【F:benchmarks/slice-search/benches/slice_search.rs†L23-L101】
+- Criterion settings were shortened to speed iteration: 100ms warmup, 200ms measurement time, and 20 samples per benchmark.【F:benchmarks/slice-search/benches/slice_search.rs†L23-L101】
+- Data generators create even-numbered sequences with a missing midpoint value so the target is absent and sits between the central elements, driving binary search down its deepest path.【F:benchmarks/slice-search/src/lib.rs†L23-L49】
 
-## Findings
-- For integer slices, binary search stays roughly constant while `contains` scales linearly. At length 1024, `contains` takes ~103ns for `i32` and ~275ns for `i64`, compared to ~15–17ns for `binary_search`.【F:benchmarks/slice-search/results/slice_search_benchmark.txt†L196-L210】【F:benchmarks/slice-search/results/slice_search_benchmark.txt†L381-L395】
-- On tiny integer slices the gap is narrow (e.g., length 1: `contains` ~2.9ns vs `binary_search` ~1.7ns for `i32`), but the logarithmic behavior wins quickly as lengths grow.【F:benchmarks/slice-search/results/slice_search_benchmark.txt†L21-L38】
-- String lookups show the largest divergence: at length 1024 the missing-target `contains` walk costs ~3.18µs while `binary_search` finishes in ~128ns, over an order of magnitude faster. Small slices remain similar (length 1: ~4.7ns each).【F:benchmarks/slice-search/results/slice_search_benchmark.txt†L400-L414】【F:benchmarks/slice-search/results/slice_search_benchmark.txt†L570-L584】
+## Findings (i64 slices up to length 32)
+- For a single-element slice, `binary_search` is ~24% faster (1.21ns vs 1.56ns).【F:benchmarks/slice-search/results/slice_search_i64_len32.txt†L1-L9】
+- Linear `contains` pulls ahead on tiny slices: at lengths 2, 4, and 8 it holds a 5–10% lead (e.g., 1.81ns vs 1.93ns at length 2).【F:benchmarks/slice-search/results/slice_search_i64_len32.txt†L10-L30】
+- The crossover happens between lengths 8 and 12; by length 12 `binary_search` is ~8% faster (3.77ns vs 4.01ns) and the gap widens with size. At length 32, `binary_search` is ~40% faster (4.25ns vs 7.23ns).【F:benchmarks/slice-search/results/slice_search_i64_len32.txt†L31-L67】
 
-The raw Criterion output is captured in `results/slice_search_benchmark.txt` for full detail.【F:benchmarks/slice-search/results/slice_search_benchmark.txt†L1-L585】
+The raw Criterion output for this run is captured in `results/slice_search_i64_len32.txt`.【F:benchmarks/slice-search/results/slice_search_i64_len32.txt†L1-L68】

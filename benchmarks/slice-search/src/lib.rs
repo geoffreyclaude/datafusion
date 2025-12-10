@@ -15,8 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-/// Power-of-two slice lengths evaluated by the benchmarks.
-pub const LENGTHS: [usize; 11] = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024];
+/// Slice lengths evaluated by the benchmarks. Densely samples sub-32 lengths
+/// to highlight the small-size crossover while keeping the higher powers of
+/// two for larger ranges.
+pub const LENGTHS: [usize; 13] = [1, 2, 4, 8, 12, 16, 24, 32, 64, 128, 256, 512, 1024];
 
 /// Builds an even-numbered sequence with a missing midpoint value to place the
 /// target between two central elements for a worst-case binary search path.

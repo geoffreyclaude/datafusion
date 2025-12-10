@@ -1,0 +1,68 @@
+i64_slice_search/contains/1
+                        time:   [1.5456 ns 1.5648 ns 1.5911 ns]
+Found 4 outliers among 20 measurements (20.00%)
+  1 (5.00%) high mild
+  3 (15.00%) high severe
+i64_slice_search/binary_search/1
+                        time:   [1.1874 ns 1.2101 ns 1.2402 ns]
+Found 1 outliers among 20 measurements (5.00%)
+  1 (5.00%) high severe
+i64_slice_search/contains/2
+                        time:   [1.8026 ns 1.8110 ns 1.8228 ns]
+Found 1 outliers among 20 measurements (5.00%)
+  1 (5.00%) high severe
+i64_slice_search/binary_search/2
+                        time:   [1.8853 ns 1.9255 ns 1.9720 ns]
+Found 2 outliers among 20 measurements (10.00%)
+  1 (5.00%) high mild
+  1 (5.00%) high severe
+i64_slice_search/contains/4
+                        time:   [2.3046 ns 2.3077 ns 2.3115 ns]
+Found 1 outliers among 20 measurements (5.00%)
+  1 (5.00%) high severe
+i64_slice_search/binary_search/4
+                        time:   [2.4095 ns 2.4347 ns 2.4691 ns]
+Found 2 outliers among 20 measurements (10.00%)
+  2 (10.00%) high severe
+i64_slice_search/contains/8
+                        time:   [2.7505 ns 2.8494 ns 2.9376 ns]
+i64_slice_search/binary_search/8
+                        time:   [3.0230 ns 3.0534 ns 3.0836 ns]
+i64_slice_search/contains/12
+                        time:   [3.9599 ns 4.0064 ns 4.0506 ns]
+Found 2 outliers among 20 measurements (10.00%)
+  1 (5.00%) high mild
+  1 (5.00%) high severe
+i64_slice_search/binary_search/12
+                        time:   [3.6687 ns 3.7706 ns 3.8765 ns]
+Found 4 outliers among 20 measurements (20.00%)
+  3 (15.00%) high mild
+  1 (5.00%) high severe
+i64_slice_search/contains/16
+                        time:   [4.1893 ns 4.2401 ns 4.2945 ns]
+Found 1 outliers among 20 measurements (5.00%)
+  1 (5.00%) high mild
+i64_slice_search/binary_search/16
+                        time:   [3.5515 ns 3.5912 ns 3.6519 ns]
+Found 4 outliers among 20 measurements (20.00%)
+  1 (5.00%) high mild
+  3 (15.00%) high severe
+i64_slice_search/contains/24
+                        time:   [5.6994 ns 5.7568 ns 5.8159 ns]
+i64_slice_search/binary_search/24
+                        time:   [4.1608 ns 4.2389 ns 4.3753 ns]
+Found 4 outliers among 20 measurements (20.00%)
+  2 (10.00%) high mild
+  2 (10.00%) high severe
+i64_slice_search/contains/32
+                        time:   [7.1149 ns 7.2307 ns 7.3574 ns]
+Found 3 outliers among 20 measurements (15.00%)
+  2 (10.00%) high mild
+  1 (5.00%) high severe
+i64_slice_search/binary_search/32
+                        time:   [4.2263 ns 4.2540 ns 4.2859 ns]
+Found 3 outliers among 20 measurements (15.00%)
+  1 (5.00%) low mild
+  1 (5.00%) high mild
+  1 (5.00%) high severe
+
