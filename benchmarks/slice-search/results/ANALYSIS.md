@@ -4,11 +4,11 @@ This document analyzes the performance of four search strategies for membership 
 
 ## Benchmark Results
 
-Results are stored per-CPU in subfolders. See:
-- [`Apple_M1_Max/slice_search.png`](Apple_M1_Max/slice_search.png) — Visual comparison
-- [`Apple_M1_Max/CUTOFFS.md`](Apple_M1_Max/CUTOFFS.md) — Recommended algorithm cutoffs
+Results are stored per-CPU in subfolders. The most recent run on this host produced:
+- [`Intel_R_Xeon_R_Platinum_8272CL_CPU_2_60GHz/slice_search.png`](Intel_R_Xeon_R_Platinum_8272CL_CPU_2_60GHz/slice_search.png) — Visual comparison
+- [`Intel_R_Xeon_R_Platinum_8272CL_CPU_2_60GHz/CUTOFFS.md`](Intel_R_Xeon_R_Platinum_8272CL_CPU_2_60GHz/CUTOFFS.md) — Recommended algorithm cutoffs
 
-![Slice Search Benchmark Results](Apple_M1_Max/slice_search.png)
+![Slice Search Benchmark Results](Intel_R_Xeon_R_Platinum_8272CL_CPU_2_60GHz/slice_search.png)
 
 ## Benchmark Configuration
 
@@ -18,7 +18,7 @@ Results are stored per-CPU in subfolders. See:
 | **Metric** | Minimum time (noise only adds, never subtracts) |
 | **Hit rate** | ~50% (mix of hits and misses) |
 | **String length** | 32 characters (differentiating suffix) |
-| **Platform** | Apple M1 Max (QoS set to prefer P-cores) |
+| **Platform** | Intel Xeon Platinum 8272CL |
 
 ### Data Types Tested
 
@@ -46,11 +46,11 @@ The const-generic branchless implementation wins decisively for small numeric ty
 
 | Type | Branchless Wins Up To |
 |------|----------------------|
-| i8 | 128 elements |
-| i16 | 64 elements |
-| i32 | 32 elements |
-| i64 | 16 elements |
-| i128 | 4 elements |
+| i8 | 16 elements (hashset leads from 17–64 before branchless regains a narrow lead) |
+| i16 | 16 elements |
+| i32 | Entire range tested (branchless is fastest throughout) |
+| i64 | Not benchmarked on this run |
+| i128 | Not benchmarked on this run |
 
 **Why?** The compiler knows the exact array size at compile time, enabling:
 - Full loop unrolling
@@ -59,7 +59,7 @@ The const-generic branchless implementation wins decisively for small numeric ty
 
 ### 2. HashSet Wins for Larger Slices
 
-Once slice size exceeds the branchless threshold, HashSet's O(1) lookup dominates:
+Once slice size exceeds the branchless threshold, HashSet's O(1) lookup dominates for the ranges we measured:
 - Near-constant time regardless of slice size
 - Construction cost amortized over 8,192 lookups per batch
 
@@ -73,7 +73,7 @@ Binary search only makes sense for single lookups where HashSet construction isn
 
 ### 4. Strings Behave Differently
 
-Without branchless (requires `Copy` trait), strings show:
+Strings were not included in this abbreviated run; previous data still shows:
 - **Linear scan wins for ≤2 elements** (no comparison overhead)
 - **HashSet wins for ≥3 elements** (hashing amortizes string comparison cost)
 
@@ -81,17 +81,21 @@ Without branchless (requires `Copy` trait), strings show:
 
 ```rust
 match (element_type, slice_length) {
-    // Small numeric types: branchless has longest runway
-    (i8, ..=128)  => branchless,
-    (i16, ..=64)  => branchless,
-    (i32, ..=32)  => branchless,
-    (i64, ..=16)  => branchless,
-    (i128, ..=4)  => branchless,
-    
-    // Strings: very short cutoff
+    // Intel Xeon (AVX2) observations from this run
+    (i8, ..=16)   => branchless,
+    (i8, 17..=64) => hashset,
+    (i8, ..=256)  => branchless, // branchless reclaims a narrow win at the largest sizes tested
+
+    (i16, ..=16)  => branchless,
+    (i16, _)      => hashset,
+
+    // i32 stayed branchless across all lengths in this run
+    (i32, _)      => branchless,
+
+    // Strings: very short cutoff (from prior macOS run)
     (str, ..=2)   => linear,
-    
-    // Everything else: HashSet
+
+    // Default to hashset when data is missing or slice is large
     _             => hashset,
 }
 ```
@@ -100,12 +104,25 @@ match (element_type, slice_length) {
 
 ```python
 def select_algorithm(element_type, slice_length):
-    if element_type.is_numeric() and slice_length <= branchless_cutoff(element_type):
-        return "branchless"
-    elif element_type == "str" and slice_length <= 2:
-        return "linear"
-    else:
+    if element_type.is_numeric():
+        if element_type == "i8" and slice_length <= 16:
+            return "branchless"
+        if element_type == "i8" and 17 <= slice_length <= 64:
+            return "hashset"
+        if element_type == "i16" and slice_length <= 16:
+            return "branchless"
+        if element_type in {"i16"}:
+            return "hashset"
+        # i32 stayed branchless across the measured range
+        if element_type == "i32":
+            return "branchless"
+        # Fall back to hashset for unmeasured numeric types/sizes
         return "hashset"
+
+    if element_type == "str" and slice_length <= 2:
+        return "linear"
+
+    return "hashset"
 ```
 
 ## Why These Cutoffs?
@@ -202,14 +219,14 @@ cargo bench
 python3 results/plot_results.py
 ```
 
-Results are automatically saved to a CPU-specific subfolder (e.g., `results/Apple_M1_Max/`).
+Results are automatically saved to a CPU-specific subfolder (e.g., `results/Intel_R_Xeon_R_Platinum_8272CL_CPU_2_60GHz/`).
 
 ## Conclusion
 
 For DataFusion's IN LIST processing:
 
-1. **Use branchless** for small numeric IN lists (size varies by type)
-2. **Use HashSet** for larger lists and strings (≥3 elements)
+1. **Use branchless** for small numeric IN lists (i8/i16 ≤ 16 on this host; i32 across the measured range)
+2. **Use HashSet** once branchless falls behind (e.g., i8 length 17–64, i16 length >16, strings ≥3 elements)
 3. **Never use binary search** in batch scenarios
 
-The branchless approach provides **2–10× speedup** over alternatives for small numeric slices, making it the clear winner for the common case of IN lists with few elements.
+Branchless keeps IN list lookups extremely fast when the slice fits within SIMD-friendly ranges, while HashSet takes over when the linear scan runs out of steam. Binary search never wins in the batch-oriented measurements we captured here.
