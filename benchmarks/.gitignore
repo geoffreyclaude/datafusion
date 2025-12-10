@@ -1,3 +1,5 @@
 data
 results
+!slice-search/results/
+!slice-search/results/*.txt
 venv
