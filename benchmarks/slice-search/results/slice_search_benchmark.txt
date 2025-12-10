@@ -1,0 +1,585 @@
+   Compiling slice-search-bench v50.0.0 (/workspace/datafusion/benchmarks/slice-search)
+    Finished `bench` profile [optimized] target(s) in 33.02s
+     Running unittests src/lib.rs (target/release/deps/slice_search_bench-3f5433913d820586)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running benches/slice_search.rs (target/release/deps/slice_search-13784148ed89ea33)
+Gnuplot not found, using plotters backend
+Benchmarking i32_slice_search/contains/1
+Benchmarking i32_slice_search/contains/1: Warming up for 1.0000 s
+Benchmarking i32_slice_search/contains/1: Collecting 50 samples in estimated 2.0000 s (654M iterations)
+Benchmarking i32_slice_search/contains/1: Analyzing
+i32_slice_search/contains/1
+                        time:   [2.8434 ns 2.8942 ns 2.9479 ns]
+                        change: [+0.6577% +2.3662% +4.0642%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+Found 1 outliers among 50 measurements (2.00%)
+  1 (2.00%) high mild
+Benchmarking i32_slice_search/binary_search/1
+Benchmarking i32_slice_search/binary_search/1: Warming up for 1.0000 s
+Benchmarking i32_slice_search/binary_search/1: Collecting 50 samples in estimated 2.0000 s (1.1B iterations)
+Benchmarking i32_slice_search/binary_search/1: Analyzing
+i32_slice_search/binary_search/1
+                        time:   [1.6997 ns 1.7116 ns 1.7254 ns]
+                        change: [-2.1442% -0.2500% +1.4071%] (p = 0.85 > 0.05)
+                        No change in performance detected.
+Found 5 outliers among 50 measurements (10.00%)
+  4 (8.00%) high mild
+  1 (2.00%) high severe
+Benchmarking i32_slice_search/contains/2
+Benchmarking i32_slice_search/contains/2: Warming up for 1.0000 s
+Benchmarking i32_slice_search/contains/2: Collecting 50 samples in estimated 2.0000 s (574M iterations)
+Benchmarking i32_slice_search/contains/2: Analyzing
+i32_slice_search/contains/2
+                        time:   [3.3727 ns 3.4071 ns 3.4491 ns]
+                        change: [-7.9537% -2.1344% +1.9117%] (p = 0.71 > 0.05)
+                        No change in performance detected.
+Found 5 outliers among 50 measurements (10.00%)
+  3 (6.00%) high mild
+  2 (4.00%) high severe
+Benchmarking i32_slice_search/binary_search/2
+Benchmarking i32_slice_search/binary_search/2: Warming up for 1.0000 s
+Benchmarking i32_slice_search/binary_search/2: Collecting 50 samples in estimated 2.0000 s (770M iterations)
+Benchmarking i32_slice_search/binary_search/2: Analyzing
+i32_slice_search/binary_search/2
+                        time:   [2.5663 ns 2.6057 ns 2.6459 ns]
+                        change: [-2.7562% -1.2693% +0.1506%] (p = 0.13 > 0.05)
+                        No change in performance detected.
+Found 3 outliers among 50 measurements (6.00%)
+  2 (4.00%) high mild
+  1 (2.00%) high severe
+Benchmarking i32_slice_search/contains/4
+Benchmarking i32_slice_search/contains/4: Warming up for 1.0000 s
+Benchmarking i32_slice_search/contains/4: Collecting 50 samples in estimated 2.0000 s (333M iterations)
+Benchmarking i32_slice_search/contains/4: Analyzing
+i32_slice_search/contains/4
+                        time:   [5.8621 ns 5.8961 ns 5.9324 ns]
+                        change: [-1.3368% +0.0738% +1.7149%] (p = 0.92 > 0.05)
+                        No change in performance detected.
+Found 6 outliers among 50 measurements (12.00%)
+  1 (2.00%) high mild
+  5 (10.00%) high severe
+Benchmarking i32_slice_search/binary_search/4
+Benchmarking i32_slice_search/binary_search/4: Warming up for 1.0000 s
+Benchmarking i32_slice_search/binary_search/4: Collecting 50 samples in estimated 2.0000 s (583M iterations)
+Benchmarking i32_slice_search/binary_search/4: Analyzing
+i32_slice_search/binary_search/4
+                        time:   [3.3681 ns 3.4173 ns 3.4704 ns]
+                        change: [-2.2843% -1.0052% +0.2352%] (p = 0.16 > 0.05)
+                        No change in performance detected.
+Found 4 outliers among 50 measurements (8.00%)
+  3 (6.00%) high mild
+  1 (2.00%) high severe
+Benchmarking i32_slice_search/contains/8
+Benchmarking i32_slice_search/contains/8: Warming up for 1.0000 s
+Benchmarking i32_slice_search/contains/8: Collecting 50 samples in estimated 2.0000 s (218M iterations)
+Benchmarking i32_slice_search/contains/8: Analyzing
+i32_slice_search/contains/8
+                        time:   [9.7406 ns 10.012 ns 10.242 ns]
+                        change: [+1.6918% +4.2889% +7.0514%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Benchmarking i32_slice_search/binary_search/8
+Benchmarking i32_slice_search/binary_search/8: Warming up for 1.0000 s
+Benchmarking i32_slice_search/binary_search/8: Collecting 50 samples in estimated 2.0000 s (446M iterations)
+Benchmarking i32_slice_search/binary_search/8: Analyzing
+i32_slice_search/binary_search/8
+                        time:   [4.2612 ns 4.3551 ns 4.4534 ns]
+                        change: [-2.3246% -0.1581% +2.5011%] (p = 0.92 > 0.05)
+                        No change in performance detected.
+Found 3 outliers among 50 measurements (6.00%)
+  2 (4.00%) high mild
+  1 (2.00%) high severe
+Benchmarking i32_slice_search/contains/16
+Benchmarking i32_slice_search/contains/16: Warming up for 1.0000 s
+Benchmarking i32_slice_search/contains/16: Collecting 50 samples in estimated 2.0000 s (575M iterations)
+Benchmarking i32_slice_search/contains/16: Analyzing
+i32_slice_search/contains/16
+                        time:   [3.4054 ns 3.4915 ns 3.6013 ns]
+                        change: [-5.0314% -3.1320% -0.9978%] (p = 0.01 < 0.05)
+                        Change within noise threshold.
+Found 5 outliers among 50 measurements (10.00%)
+  4 (8.00%) high mild
+  1 (2.00%) high severe
+Benchmarking i32_slice_search/binary_search/16
+Benchmarking i32_slice_search/binary_search/16: Warming up for 1.0000 s
+Benchmarking i32_slice_search/binary_search/16: Collecting 50 samples in estimated 2.0000 s (382M iterations)
+Benchmarking i32_slice_search/binary_search/16: Analyzing
+i32_slice_search/binary_search/16
+                        time:   [5.2204 ns 5.2860 ns 5.3578 ns]
+                        change: [+0.0643% +1.6259% +3.1010%] (p = 0.02 < 0.05)
+                        Change within noise threshold.
+Found 3 outliers among 50 measurements (6.00%)
+  3 (6.00%) high mild
+Benchmarking i32_slice_search/contains/32
+Benchmarking i32_slice_search/contains/32: Warming up for 1.0000 s
+Benchmarking i32_slice_search/contains/32: Collecting 50 samples in estimated 2.0000 s (414M iterations)
+Benchmarking i32_slice_search/contains/32: Analyzing
+i32_slice_search/contains/32
+                        time:   [4.7652 ns 4.8226 ns 4.8932 ns]
+Found 4 outliers among 50 measurements (8.00%)
+  3 (6.00%) high mild
+  1 (2.00%) high severe
+Benchmarking i32_slice_search/binary_search/32
+Benchmarking i32_slice_search/binary_search/32: Warming up for 1.0000 s
+Benchmarking i32_slice_search/binary_search/32: Collecting 50 samples in estimated 2.0000 s (324M iterations)
+Benchmarking i32_slice_search/binary_search/32: Analyzing
+i32_slice_search/binary_search/32
+                        time:   [6.3690 ns 6.5318 ns 6.7126 ns]
+Found 2 outliers among 50 measurements (4.00%)
+  2 (4.00%) high mild
+Benchmarking i32_slice_search/contains/64
+Benchmarking i32_slice_search/contains/64: Warming up for 1.0000 s
+Benchmarking i32_slice_search/contains/64: Collecting 50 samples in estimated 2.0000 s (275M iterations)
+Benchmarking i32_slice_search/contains/64: Analyzing
+i32_slice_search/contains/64
+                        time:   [7.4270 ns 7.5499 ns 7.6751 ns]
+Found 3 outliers among 50 measurements (6.00%)
+  3 (6.00%) high mild
+Benchmarking i32_slice_search/binary_search/64
+Benchmarking i32_slice_search/binary_search/64: Warming up for 1.0000 s
+Benchmarking i32_slice_search/binary_search/64: Collecting 50 samples in estimated 2.0000 s (256M iterations)
+Benchmarking i32_slice_search/binary_search/64: Analyzing
+i32_slice_search/binary_search/64
+                        time:   [7.1157 ns 7.3181 ns 7.5563 ns]
+Found 3 outliers among 50 measurements (6.00%)
+  1 (2.00%) high mild
+  2 (4.00%) high severe
+Benchmarking i32_slice_search/contains/128
+Benchmarking i32_slice_search/contains/128: Warming up for 1.0000 s
+Benchmarking i32_slice_search/contains/128: Collecting 50 samples in estimated 2.0000 s (145M iterations)
+Benchmarking i32_slice_search/contains/128: Analyzing
+i32_slice_search/contains/128
+                        time:   [13.666 ns 13.990 ns 14.371 ns]
+Benchmarking i32_slice_search/binary_search/128
+Benchmarking i32_slice_search/binary_search/128: Warming up for 1.0000 s
+Benchmarking i32_slice_search/binary_search/128: Collecting 50 samples in estimated 2.0000 s (241M iterations)
+Benchmarking i32_slice_search/binary_search/128: Analyzing
+i32_slice_search/binary_search/128
+                        time:   [8.5231 ns 8.8182 ns 9.1548 ns]
+Found 3 outliers among 50 measurements (6.00%)
+  3 (6.00%) high mild
+Benchmarking i32_slice_search/contains/256
+Benchmarking i32_slice_search/contains/256: Warming up for 1.0000 s
+Benchmarking i32_slice_search/contains/256: Collecting 50 samples in estimated 2.0000 s (77M iterations)
+Benchmarking i32_slice_search/contains/256: Analyzing
+i32_slice_search/contains/256
+                        time:   [25.349 ns 25.729 ns 26.195 ns]
+Found 2 outliers among 50 measurements (4.00%)
+  2 (4.00%) high severe
+Benchmarking i32_slice_search/binary_search/256
+Benchmarking i32_slice_search/binary_search/256: Warming up for 1.0000 s
+Benchmarking i32_slice_search/binary_search/256: Collecting 50 samples in estimated 2.0000 s (211M iterations)
+Benchmarking i32_slice_search/binary_search/256: Analyzing
+i32_slice_search/binary_search/256
+                        time:   [9.3413 ns 9.5171 ns 9.7243 ns]
+Found 4 outliers among 50 measurements (8.00%)
+  4 (8.00%) high severe
+Benchmarking i32_slice_search/contains/512
+Benchmarking i32_slice_search/contains/512: Warming up for 1.0000 s
+Benchmarking i32_slice_search/contains/512: Collecting 50 samples in estimated 2.0000 s (43M iterations)
+Benchmarking i32_slice_search/contains/512: Analyzing
+i32_slice_search/contains/512
+                        time:   [46.672 ns 48.031 ns 49.578 ns]
+Found 2 outliers among 50 measurements (4.00%)
+  2 (4.00%) high mild
+Benchmarking i32_slice_search/binary_search/512
+Benchmarking i32_slice_search/binary_search/512: Warming up for 1.0000 s
+Benchmarking i32_slice_search/binary_search/512: Collecting 50 samples in estimated 2.0000 s (179M iterations)
+Benchmarking i32_slice_search/binary_search/512: Analyzing
+i32_slice_search/binary_search/512
+                        time:   [10.799 ns 10.923 ns 11.076 ns]
+Found 1 outliers among 50 measurements (2.00%)
+  1 (2.00%) high mild
+Benchmarking i32_slice_search/contains/1024
+Benchmarking i32_slice_search/contains/1024: Warming up for 1.0000 s
+Benchmarking i32_slice_search/contains/1024: Collecting 50 samples in estimated 2.0000 s (20M iterations)
+Benchmarking i32_slice_search/contains/1024: Analyzing
+i32_slice_search/contains/1024
+                        time:   [100.77 ns 103.07 ns 105.67 ns]
+Found 3 outliers among 50 measurements (6.00%)
+  1 (2.00%) high mild
+  2 (4.00%) high severe
+Benchmarking i32_slice_search/binary_search/1024
+Benchmarking i32_slice_search/binary_search/1024: Warming up for 1.0000 s
+Benchmarking i32_slice_search/binary_search/1024: Collecting 50 samples in estimated 2.0000 s (151M iterations)
+Benchmarking i32_slice_search/binary_search/1024: Analyzing
+i32_slice_search/binary_search/1024
+                        time:   [14.288 ns 14.807 ns 15.434 ns]
+Found 6 outliers among 50 measurements (12.00%)
+  4 (8.00%) high mild
+  2 (4.00%) high severe
+
+Benchmarking i64_slice_search/contains/1
+Benchmarking i64_slice_search/contains/1: Warming up for 1.0000 s
+Benchmarking i64_slice_search/contains/1: Collecting 50 samples in estimated 2.0000 s (882M iterations)
+Benchmarking i64_slice_search/contains/1: Analyzing
+i64_slice_search/contains/1
+                        time:   [2.2036 ns 2.2405 ns 2.2822 ns]
+Found 1 outliers among 50 measurements (2.00%)
+  1 (2.00%) high mild
+Benchmarking i64_slice_search/binary_search/1
+Benchmarking i64_slice_search/binary_search/1: Warming up for 1.0000 s
+Benchmarking i64_slice_search/binary_search/1: Collecting 50 samples in estimated 2.0000 s (1.1B iterations)
+Benchmarking i64_slice_search/binary_search/1: Analyzing
+i64_slice_search/binary_search/1
+                        time:   [1.7299 ns 1.7551 ns 1.7834 ns]
+Found 3 outliers among 50 measurements (6.00%)
+  3 (6.00%) high mild
+Benchmarking i64_slice_search/contains/2
+Benchmarking i64_slice_search/contains/2: Warming up for 1.0000 s
+Benchmarking i64_slice_search/contains/2: Collecting 50 samples in estimated 2.0000 s (773M iterations)
+Benchmarking i64_slice_search/contains/2: Analyzing
+i64_slice_search/contains/2
+                        time:   [2.5553 ns 2.5844 ns 2.6249 ns]
+Found 9 outliers among 50 measurements (18.00%)
+  6 (12.00%) high mild
+  3 (6.00%) high severe
+Benchmarking i64_slice_search/binary_search/2
+Benchmarking i64_slice_search/binary_search/2: Warming up for 1.0000 s
+Benchmarking i64_slice_search/binary_search/2: Collecting 50 samples in estimated 2.0000 s (755M iterations)
+Benchmarking i64_slice_search/binary_search/2: Analyzing
+i64_slice_search/binary_search/2
+                        time:   [2.5049 ns 2.5446 ns 2.5922 ns]
+Found 5 outliers among 50 measurements (10.00%)
+  4 (8.00%) high mild
+  1 (2.00%) high severe
+Benchmarking i64_slice_search/contains/4
+Benchmarking i64_slice_search/contains/4: Warming up for 1.0000 s
+Benchmarking i64_slice_search/contains/4: Collecting 50 samples in estimated 2.0000 s (585M iterations)
+Benchmarking i64_slice_search/contains/4: Analyzing
+i64_slice_search/contains/4
+                        time:   [3.4247 ns 3.4634 ns 3.4994 ns]
+Found 3 outliers among 50 measurements (6.00%)
+  2 (4.00%) high mild
+  1 (2.00%) high severe
+Benchmarking i64_slice_search/binary_search/4
+Benchmarking i64_slice_search/binary_search/4: Warming up for 1.0000 s
+Benchmarking i64_slice_search/binary_search/4: Collecting 50 samples in estimated 2.0000 s (466M iterations)
+Benchmarking i64_slice_search/binary_search/4: Analyzing
+i64_slice_search/binary_search/4
+                        time:   [3.9729 ns 4.0118 ns 4.0543 ns]
+Found 2 outliers among 50 measurements (4.00%)
+  1 (2.00%) high mild
+  1 (2.00%) high severe
+Benchmarking i64_slice_search/contains/8
+Benchmarking i64_slice_search/contains/8: Warming up for 1.0000 s
+Benchmarking i64_slice_search/contains/8: Collecting 50 samples in estimated 2.0000 s (505M iterations)
+Benchmarking i64_slice_search/contains/8: Analyzing
+i64_slice_search/contains/8
+                        time:   [3.8821 ns 3.9343 ns 3.9946 ns]
+Found 5 outliers among 50 measurements (10.00%)
+  3 (6.00%) high mild
+  2 (4.00%) high severe
+Benchmarking i64_slice_search/binary_search/8
+Benchmarking i64_slice_search/binary_search/8: Warming up for 1.0000 s
+Benchmarking i64_slice_search/binary_search/8: Collecting 50 samples in estimated 2.0000 s (438M iterations)
+Benchmarking i64_slice_search/binary_search/8: Analyzing
+i64_slice_search/binary_search/8
+                        time:   [4.4507 ns 4.4932 ns 4.5367 ns]
+Found 2 outliers among 50 measurements (4.00%)
+  2 (4.00%) high mild
+Benchmarking i64_slice_search/contains/16
+Benchmarking i64_slice_search/contains/16: Warming up for 1.0000 s
+Benchmarking i64_slice_search/contains/16: Collecting 50 samples in estimated 2.0000 s (330M iterations)
+Benchmarking i64_slice_search/contains/16: Analyzing
+i64_slice_search/contains/16
+                        time:   [6.0963 ns 6.1919 ns 6.2916 ns]
+Found 3 outliers among 50 measurements (6.00%)
+  2 (4.00%) high mild
+  1 (2.00%) high severe
+Benchmarking i64_slice_search/binary_search/16
+Benchmarking i64_slice_search/binary_search/16: Warming up for 1.0000 s
+Benchmarking i64_slice_search/binary_search/16: Collecting 50 samples in estimated 2.0000 s (377M iterations)
+Benchmarking i64_slice_search/binary_search/16: Analyzing
+i64_slice_search/binary_search/16
+                        time:   [5.2340 ns 5.3116 ns 5.3890 ns]
+Found 1 outliers among 50 measurements (2.00%)
+  1 (2.00%) high mild
+Benchmarking i64_slice_search/contains/32
+Benchmarking i64_slice_search/contains/32: Warming up for 1.0000 s
+Benchmarking i64_slice_search/contains/32: Collecting 50 samples in estimated 2.0000 s (191M iterations)
+Benchmarking i64_slice_search/contains/32: Analyzing
+i64_slice_search/contains/32
+                        time:   [10.358 ns 10.442 ns 10.524 ns]
+Benchmarking i64_slice_search/binary_search/32
+Benchmarking i64_slice_search/binary_search/32: Warming up for 1.0000 s
+Benchmarking i64_slice_search/binary_search/32: Collecting 50 samples in estimated 2.0000 s (271M iterations)
+Benchmarking i64_slice_search/binary_search/32: Analyzing
+i64_slice_search/binary_search/32
+                        time:   [7.0404 ns 7.3166 ns 7.5560 ns]
+Found 8 outliers among 50 measurements (16.00%)
+  5 (10.00%) low severe
+  2 (4.00%) low mild
+  1 (2.00%) high severe
+Benchmarking i64_slice_search/contains/64
+Benchmarking i64_slice_search/contains/64: Warming up for 1.0000 s
+Benchmarking i64_slice_search/contains/64: Collecting 50 samples in estimated 2.0000 s (103M iterations)
+Benchmarking i64_slice_search/contains/64: Analyzing
+i64_slice_search/contains/64
+                        time:   [18.652 ns 18.903 ns 19.177 ns]
+Found 4 outliers among 50 measurements (8.00%)
+  4 (8.00%) high mild
+Benchmarking i64_slice_search/binary_search/64
+Benchmarking i64_slice_search/binary_search/64: Warming up for 1.0000 s
+Benchmarking i64_slice_search/binary_search/64: Collecting 50 samples in estimated 2.0000 s (222M iterations)
+Benchmarking i64_slice_search/binary_search/64: Analyzing
+i64_slice_search/binary_search/64
+                        time:   [7.8197 ns 8.1173 ns 8.4275 ns]
+Found 5 outliers among 50 measurements (10.00%)
+  4 (8.00%) low mild
+  1 (2.00%) high mild
+Benchmarking i64_slice_search/contains/128
+Benchmarking i64_slice_search/contains/128: Warming up for 1.0000 s
+Benchmarking i64_slice_search/contains/128: Collecting 50 samples in estimated 2.0000 s (54M iterations)
+Benchmarking i64_slice_search/contains/128: Analyzing
+i64_slice_search/contains/128
+                        time:   [35.374 ns 35.664 ns 35.992 ns]
+Found 4 outliers among 50 measurements (8.00%)
+  2 (4.00%) high mild
+  2 (4.00%) high severe
+Benchmarking i64_slice_search/binary_search/128
+Benchmarking i64_slice_search/binary_search/128: Warming up for 1.0000 s
+Benchmarking i64_slice_search/binary_search/128: Collecting 50 samples in estimated 2.0000 s (247M iterations)
+Benchmarking i64_slice_search/binary_search/128: Analyzing
+i64_slice_search/binary_search/128
+                        time:   [9.2288 ns 9.6104 ns 9.9338 ns]
+Benchmarking i64_slice_search/contains/256
+Benchmarking i64_slice_search/contains/256: Warming up for 1.0000 s
+Benchmarking i64_slice_search/contains/256: Collecting 50 samples in estimated 2.0001 s (27M iterations)
+Benchmarking i64_slice_search/contains/256: Analyzing
+i64_slice_search/contains/256
+                        time:   [69.515 ns 70.717 ns 72.062 ns]
+Benchmarking i64_slice_search/binary_search/256
+Benchmarking i64_slice_search/binary_search/256: Warming up for 1.0000 s
+Benchmarking i64_slice_search/binary_search/256: Collecting 50 samples in estimated 2.0000 s (211M iterations)
+Benchmarking i64_slice_search/binary_search/256: Analyzing
+i64_slice_search/binary_search/256
+                        time:   [9.6867 ns 9.9665 ns 10.258 ns]
+Found 1 outliers among 50 measurements (2.00%)
+  1 (2.00%) high mild
+Benchmarking i64_slice_search/contains/512
+Benchmarking i64_slice_search/contains/512: Warming up for 1.0000 s
+Benchmarking i64_slice_search/contains/512: Collecting 50 samples in estimated 2.0001 s (14M iterations)
+Benchmarking i64_slice_search/contains/512: Analyzing
+i64_slice_search/contains/512
+                        time:   [138.61 ns 141.17 ns 144.38 ns]
+Found 3 outliers among 50 measurements (6.00%)
+  2 (4.00%) high mild
+  1 (2.00%) high severe
+Benchmarking i64_slice_search/binary_search/512
+Benchmarking i64_slice_search/binary_search/512: Warming up for 1.0000 s
+Benchmarking i64_slice_search/binary_search/512: Collecting 50 samples in estimated 2.0000 s (185M iterations)
+Benchmarking i64_slice_search/binary_search/512: Analyzing
+i64_slice_search/binary_search/512
+                        time:   [10.805 ns 10.896 ns 11.016 ns]
+Found 3 outliers among 50 measurements (6.00%)
+  2 (4.00%) high mild
+  1 (2.00%) high severe
+Benchmarking i64_slice_search/contains/1024
+Benchmarking i64_slice_search/contains/1024: Warming up for 1.0000 s
+Benchmarking i64_slice_search/contains/1024: Collecting 50 samples in estimated 2.0003 s (7.2M iterations)
+Benchmarking i64_slice_search/contains/1024: Analyzing
+i64_slice_search/contains/1024
+                        time:   [272.58 ns 274.95 ns 277.58 ns]
+Found 5 outliers among 50 measurements (10.00%)
+  4 (8.00%) high mild
+  1 (2.00%) high severe
+Benchmarking i64_slice_search/binary_search/1024
+Benchmarking i64_slice_search/binary_search/1024: Warming up for 1.0000 s
+Benchmarking i64_slice_search/binary_search/1024: Collecting 50 samples in estimated 2.0000 s (128M iterations)
+Benchmarking i64_slice_search/binary_search/1024: Analyzing
+i64_slice_search/binary_search/1024
+                        time:   [16.935 ns 17.223 ns 17.508 ns]
+Found 1 outliers among 50 measurements (2.00%)
+  1 (2.00%) high mild
+
+Benchmarking str_slice_search/contains/1
+Benchmarking str_slice_search/contains/1: Warming up for 1.0000 s
+Benchmarking str_slice_search/contains/1: Collecting 50 samples in estimated 2.0000 s (440M iterations)
+Benchmarking str_slice_search/contains/1: Analyzing
+str_slice_search/contains/1
+                        time:   [4.5853 ns 4.6543 ns 4.7281 ns]
+Found 4 outliers among 50 measurements (8.00%)
+  3 (6.00%) high mild
+  1 (2.00%) high severe
+Benchmarking str_slice_search/binary_search/1
+Benchmarking str_slice_search/binary_search/1: Warming up for 1.0000 s
+Benchmarking str_slice_search/binary_search/1: Collecting 50 samples in estimated 2.0000 s (433M iterations)
+Benchmarking str_slice_search/binary_search/1: Analyzing
+str_slice_search/binary_search/1
+                        time:   [4.6580 ns 4.7274 ns 4.8098 ns]
+Found 3 outliers among 50 measurements (6.00%)
+  2 (4.00%) high mild
+  1 (2.00%) high severe
+Benchmarking str_slice_search/contains/2
+Benchmarking str_slice_search/contains/2: Warming up for 1.0000 s
+Benchmarking str_slice_search/contains/2: Collecting 50 samples in estimated 2.0000 s (239M iterations)
+Benchmarking str_slice_search/contains/2: Analyzing
+str_slice_search/contains/2
+                        time:   [8.0465 ns 8.1145 ns 8.1957 ns]
+Found 3 outliers among 50 measurements (6.00%)
+  2 (4.00%) high mild
+  1 (2.00%) high severe
+Benchmarking str_slice_search/binary_search/2
+Benchmarking str_slice_search/binary_search/2: Warming up for 1.0000 s
+Benchmarking str_slice_search/binary_search/2: Collecting 50 samples in estimated 2.0000 s (130M iterations)
+Benchmarking str_slice_search/binary_search/2: Analyzing
+str_slice_search/binary_search/2
+                        time:   [10.658 ns 10.815 ns 11.009 ns]
+Found 7 outliers among 50 measurements (14.00%)
+  5 (10.00%) high mild
+  2 (4.00%) high severe
+Benchmarking str_slice_search/contains/4
+Benchmarking str_slice_search/contains/4: Warming up for 1.0000 s
+Benchmarking str_slice_search/contains/4: Collecting 50 samples in estimated 2.0000 s (132M iterations)
+Benchmarking str_slice_search/contains/4: Analyzing
+str_slice_search/contains/4
+                        time:   [14.325 ns 14.425 ns 14.522 ns]
+Benchmarking str_slice_search/binary_search/4
+Benchmarking str_slice_search/binary_search/4: Warming up for 1.0000 s
+Benchmarking str_slice_search/binary_search/4: Collecting 50 samples in estimated 2.0000 s (104M iterations)
+Benchmarking str_slice_search/binary_search/4: Analyzing
+str_slice_search/binary_search/4
+                        time:   [18.505 ns 18.633 ns 18.806 ns]
+Found 2 outliers among 50 measurements (4.00%)
+  2 (4.00%) high mild
+Benchmarking str_slice_search/contains/8
+Benchmarking str_slice_search/contains/8: Warming up for 1.0000 s
+Benchmarking str_slice_search/contains/8: Collecting 50 samples in estimated 2.0000 s (76M iterations)
+Benchmarking str_slice_search/contains/8: Analyzing
+str_slice_search/contains/8
+                        time:   [25.753 ns 26.201 ns 26.913 ns]
+Found 2 outliers among 50 measurements (4.00%)
+  1 (2.00%) high mild
+  1 (2.00%) high severe
+Benchmarking str_slice_search/binary_search/8
+Benchmarking str_slice_search/binary_search/8: Warming up for 1.0000 s
+Benchmarking str_slice_search/binary_search/8: Collecting 50 samples in estimated 2.0000 s (65M iterations)
+Benchmarking str_slice_search/binary_search/8: Analyzing
+str_slice_search/binary_search/8
+                        time:   [32.189 ns 32.396 ns 32.569 ns]
+Found 1 outliers among 50 measurements (2.00%)
+  1 (2.00%) high severe
+Benchmarking str_slice_search/contains/16
+Benchmarking str_slice_search/contains/16: Warming up for 1.0000 s
+Benchmarking str_slice_search/contains/16: Collecting 50 samples in estimated 2.0000 s (39M iterations)
+Benchmarking str_slice_search/contains/16: Analyzing
+str_slice_search/contains/16
+                        time:   [51.709 ns 52.797 ns 54.192 ns]
+Found 9 outliers among 50 measurements (18.00%)
+  6 (12.00%) high mild
+  3 (6.00%) high severe
+Benchmarking str_slice_search/binary_search/16
+Benchmarking str_slice_search/binary_search/16: Warming up for 1.0000 s
+Benchmarking str_slice_search/binary_search/16: Collecting 50 samples in estimated 2.0000 s (44M iterations)
+Benchmarking str_slice_search/binary_search/16: Analyzing
+str_slice_search/binary_search/16
+                        time:   [39.638 ns 39.955 ns 40.292 ns]
+Found 2 outliers among 50 measurements (4.00%)
+  1 (2.00%) low mild
+  1 (2.00%) high mild
+Benchmarking str_slice_search/contains/32
+Benchmarking str_slice_search/contains/32: Warming up for 1.0000 s
+Benchmarking str_slice_search/contains/32: Collecting 50 samples in estimated 2.0001 s (18M iterations)
+Benchmarking str_slice_search/contains/32: Analyzing
+str_slice_search/contains/32
+                        time:   [101.30 ns 103.20 ns 105.43 ns]
+Found 6 outliers among 50 measurements (12.00%)
+  1 (2.00%) high mild
+  5 (10.00%) high severe
+Benchmarking str_slice_search/binary_search/32
+Benchmarking str_slice_search/binary_search/32: Warming up for 1.0000 s
+Benchmarking str_slice_search/binary_search/32: Collecting 50 samples in estimated 2.0000 s (43M iterations)
+Benchmarking str_slice_search/binary_search/32: Analyzing
+str_slice_search/binary_search/32
+                        time:   [46.541 ns 47.000 ns 47.504 ns]
+Found 3 outliers among 50 measurements (6.00%)
+  2 (4.00%) high mild
+  1 (2.00%) high severe
+Benchmarking str_slice_search/contains/64
+Benchmarking str_slice_search/contains/64: Warming up for 1.0000 s
+Benchmarking str_slice_search/contains/64: Collecting 50 samples in estimated 2.0001 s (9.6M iterations)
+Benchmarking str_slice_search/contains/64: Analyzing
+str_slice_search/contains/64
+                        time:   [204.75 ns 207.16 ns 210.18 ns]
+Found 4 outliers among 50 measurements (8.00%)
+  2 (4.00%) high mild
+  2 (4.00%) high severe
+Benchmarking str_slice_search/binary_search/64
+Benchmarking str_slice_search/binary_search/64: Warming up for 1.0000 s
+Benchmarking str_slice_search/binary_search/64: Collecting 50 samples in estimated 2.0000 s (33M iterations)
+Benchmarking str_slice_search/binary_search/64: Analyzing
+str_slice_search/binary_search/64
+                        time:   [63.083 ns 63.730 ns 64.535 ns]
+Found 3 outliers among 50 measurements (6.00%)
+  3 (6.00%) high severe
+Benchmarking str_slice_search/contains/128
+Benchmarking str_slice_search/contains/128: Warming up for 1.0000 s
+Benchmarking str_slice_search/contains/128: Collecting 50 samples in estimated 2.0003 s (5.1M iterations)
+Benchmarking str_slice_search/contains/128: Analyzing
+str_slice_search/contains/128
+                        time:   [393.49 ns 397.50 ns 402.44 ns]
+Found 6 outliers among 50 measurements (12.00%)
+  2 (4.00%) high mild
+  4 (8.00%) high severe
+Benchmarking str_slice_search/binary_search/128
+Benchmarking str_slice_search/binary_search/128: Warming up for 1.0000 s
+Benchmarking str_slice_search/binary_search/128: Collecting 50 samples in estimated 2.0000 s (27M iterations)
+Benchmarking str_slice_search/binary_search/128: Analyzing
+str_slice_search/binary_search/128
+                        time:   [68.643 ns 69.781 ns 70.984 ns]
+Found 5 outliers among 50 measurements (10.00%)
+  2 (4.00%) high mild
+  3 (6.00%) high severe
+Benchmarking str_slice_search/contains/256
+Benchmarking str_slice_search/contains/256: Warming up for 1.0000 s
+Benchmarking str_slice_search/contains/256: Collecting 50 samples in estimated 2.0002 s (2.4M iterations)
+Benchmarking str_slice_search/contains/256: Analyzing
+str_slice_search/contains/256
+                        time:   [762.33 ns 774.08 ns 785.96 ns]
+Found 5 outliers among 50 measurements (10.00%)
+  5 (10.00%) high mild
+Benchmarking str_slice_search/binary_search/256
+Benchmarking str_slice_search/binary_search/256: Warming up for 1.0000 s
+Benchmarking str_slice_search/binary_search/256: Collecting 50 samples in estimated 2.0000 s (23M iterations)
+Benchmarking str_slice_search/binary_search/256: Analyzing
+str_slice_search/binary_search/256
+                        time:   [85.320 ns 85.816 ns 86.414 ns]
+Found 4 outliers among 50 measurements (8.00%)
+  3 (6.00%) high mild
+  1 (2.00%) high severe
+Benchmarking str_slice_search/contains/512
+Benchmarking str_slice_search/contains/512: Warming up for 1.0000 s
+Benchmarking str_slice_search/contains/512: Collecting 50 samples in estimated 2.0004 s (1.3M iterations)
+Benchmarking str_slice_search/contains/512: Analyzing
+str_slice_search/contains/512
+                        time:   [1.5449 µs 1.5562 µs 1.5672 µs]
+Found 2 outliers among 50 measurements (4.00%)
+  2 (4.00%) high mild
+Benchmarking str_slice_search/binary_search/512
+Benchmarking str_slice_search/binary_search/512: Warming up for 1.0000 s
+Benchmarking str_slice_search/binary_search/512: Collecting 50 samples in estimated 2.0000 s (21M iterations)
+Benchmarking str_slice_search/binary_search/512: Analyzing
+str_slice_search/binary_search/512
+                        time:   [95.929 ns 96.441 ns 96.943 ns]
+Found 2 outliers among 50 measurements (4.00%)
+  2 (4.00%) high severe
+Benchmarking str_slice_search/contains/1024
+Benchmarking str_slice_search/contains/1024: Warming up for 1.0000 s
+Benchmarking str_slice_search/contains/1024: Collecting 50 samples in estimated 2.0014 s (623k iterations)
+Benchmarking str_slice_search/contains/1024: Analyzing
+str_slice_search/contains/1024
+                        time:   [3.1109 µs 3.1802 µs 3.2514 µs]
+Found 8 outliers among 50 measurements (16.00%)
+  6 (12.00%) high mild
+  2 (4.00%) high severe
+Benchmarking str_slice_search/binary_search/1024
+Benchmarking str_slice_search/binary_search/1024: Warming up for 1.0000 s
+Benchmarking str_slice_search/binary_search/1024: Collecting 50 samples in estimated 2.0001 s (18M iterations)
+Benchmarking str_slice_search/binary_search/1024: Analyzing
+str_slice_search/binary_search/1024
+                        time:   [127.34 ns 128.08 ns 128.83 ns]
+

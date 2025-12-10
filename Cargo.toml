@@ -62,6 +62,7 @@ members = [
     "datafusion-examples/examples/ffi/ffi_module_loader",
     "test-utils",
     "benchmarks",
+    "benchmarks/slice-search",
     "datafusion/macros",
     "datafusion/doc",
 ]
