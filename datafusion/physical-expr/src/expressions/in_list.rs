@@ -18,6 +18,7 @@
 //! Implementation of `InList` expressions: [`InListExpr`]
 
 mod array_filter;
+mod result;
 
 use std::any::Any;
 use std::fmt::Debug;
