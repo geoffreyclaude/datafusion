@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(for i in 1 2 3)",
+      "Bash(do)",
+      "Bash(echo:*)",
+      "Bash(done)",
+      "Bash(grep:*)",
+      "Bash(ls:*)",
+      "Bash(do cargo bench --bench in_list -- \"Int32/list=100/nulls=0\")",
+      "Bash(git stash:*)",
+      "Bash(git checkout:*)",
+      "Bash(cat:*)",
+      "Bash(git show:*)",
+      "Bash(git reset:*)",
+      "Bash(cargo check:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
+    ]
+  }
+}

@@ -53,9 +53,10 @@ pub(crate) fn build_in_list_result<C>(
     contains: C,
 ) -> BooleanArray
 where
-    C: Fn(usize) -> bool,
+    C: FnMut(usize) -> bool,
 {
-    let contains_buf = BooleanBuffer::collect_bool(len, &contains);
+    // Pass closure by value to avoid indirection on each call
+    let contains_buf = BooleanBuffer::collect_bool(len, contains);
     build_result_from_contains(needle_nulls, haystack_has_nulls, negated, contains_buf)
 }
 
