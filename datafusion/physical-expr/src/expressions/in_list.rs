@@ -17,6 +17,13 @@
 
 //! Implementation of `InList` expressions: [`InListExpr`]
 
+mod nested_filter;
+mod primitive_filter;
+mod result;
+mod static_filter;
+mod strategy;
+mod transform;
+
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -30,18 +37,10 @@ use arrow::compute::SortOptions;
 use arrow::compute::kernels::boolean::{not, or_kleene};
 use arrow::compute::kernels::cmp::eq as arrow_eq;
 use arrow::datatypes::*;
-
 use datafusion_common::{
     DFSchema, Result, ScalarValue, assert_or_internal_err, exec_err,
 };
 use datafusion_expr::{ColumnarValue, expr_vec_fmt};
-
-mod nested_filter;
-mod primitive_filter;
-mod result;
-mod static_filter;
-mod strategy;
-mod transform;
 
 use static_filter::StaticFilter;
 use strategy::instantiate_static_filter;
