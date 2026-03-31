@@ -1,0 +1,100 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+query III
+SELECT __virtual_row_num, id, value
+FROM virtual_row_num_parquet
+ORDER BY __virtual_row_num;
+----
+0 10 5
+1 11 6
+2 12 7
+3 13 8
+4 20 1
+5 21 2
+6 22 3
+7 23 4
+8 30 9
+9 31 10
+10 32 11
+11 33 12
+
+query III
+SELECT __virtual_row_num, id, value
+FROM virtual_row_num_parquet
+WHERE __virtual_row_num > 4
+ORDER BY __virtual_row_num
+LIMIT 3;
+----
+5 21 2
+6 22 3
+7 23 4
+
+query II
+SELECT __virtual_row_num, value
+FROM virtual_row_num_parquet
+WHERE __virtual_row_num > 2 AND value % 2 = 0
+ORDER BY __virtual_row_num;
+----
+3 8
+5 2
+7 4
+9 10
+11 12
+
+query III
+SELECT *
+FROM virtual_row_num_parquet
+WHERE __virtual_row_num BETWEEN 0 AND 1
+ORDER BY __virtual_row_num;
+----
+10 5 0
+11 6 1
+
+query I
+SELECT id
+FROM virtual_row_num_parquet
+WHERE __virtual_row_num = 4;
+----
+20
+
+query III
+SELECT __virtual_row_num, id, value
+FROM virtual_row_num_parquet
+WHERE __virtual_row_num BETWEEN 8 AND 10
+ORDER BY __virtual_row_num;
+----
+8 30 9
+9 31 10
+10 32 11
+
+query TT
+EXPLAIN SELECT __virtual_row_num, id
+FROM virtual_row_num_parquet
+WHERE __virtual_row_num > 4
+ORDER BY __virtual_row_num
+LIMIT 3;
+----
+logical_plan
+01)Sort: virtual_row_num_parquet.__virtual_row_num ASC NULLS LAST, fetch=3
+02)--Projection: virtual_row_num_parquet.__virtual_row_num, virtual_row_num_parquet.id
+03)----TableScan: virtual_row_num_parquet projection=[id, __virtual_row_num], full_filters=[virtual_row_num_parquet.__virtual_row_num > UInt64(4)]
+physical_plan
+01)ProjectionExec: expr=[__virtual_row_num@1 as __virtual_row_num, id@0 as id]
+02)--GlobalLimitExec: skip=0, fetch=3
+03)----VirtualRowNumExec: start_row_num=5, row_num_column=__virtual_row_num
+04)------DataSourceExec: <slt:ignore>

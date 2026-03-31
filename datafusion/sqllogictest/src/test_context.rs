@@ -34,6 +34,10 @@ use datafusion::catalog::{
     CatalogProvider, MemoryCatalogProvider, MemorySchemaProvider, SchemaProvider, Session,
 };
 use datafusion::common::{DataFusionError, Result, not_impl_err};
+use datafusion::datasource::file_format::parquet::ParquetFormat;
+use datafusion::datasource::listing::{
+    ListingOptions, ListingTableConfig, ListingTableUrl,
+};
 use datafusion::functions::math::abs;
 use datafusion::logical_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
 use datafusion::logical_expr::{
@@ -47,6 +51,7 @@ use datafusion::{
     prelude::{CsvReadOptions, SessionContext},
 };
 use datafusion_spark::SessionStateBuilderSpark;
+use datafusion_virtual_row_num_poc::register_virtual_row_num_table;
 
 use crate::is_spark_path;
 use async_trait::async_trait;
@@ -54,6 +59,8 @@ use datafusion::common::cast::as_float64_array;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use log::info;
+use parquet::arrow::ArrowWriter;
+use parquet::file::properties::WriterProperties;
 use tempfile::TempDir;
 
 /// Context for running tests
@@ -140,6 +147,10 @@ impl TestContext {
             "metadata.slt" => {
                 info!("Registering metadata table tables");
                 register_metadata_tables(test_ctx.session_ctx()).await;
+            }
+            "virtual_row_num.slt" => {
+                info!("Registering virtual row number parquet table");
+                register_virtual_row_num_poc_table(&mut test_ctx).await;
             }
             "union_function.slt" => {
                 info!("Registering table with union column");
@@ -286,6 +297,65 @@ pub async fn register_avro_tables(ctx: &mut TestContext) {
         )
         .await
         .unwrap();
+}
+
+pub async fn register_virtual_row_num_poc_table(test_ctx: &mut TestContext) {
+    test_ctx.enable_testdir();
+
+    let table_path = test_ctx.testdir_path().join("virtual_row_num");
+    std::fs::create_dir(&table_path)
+        .expect("failed to create virtual_row_num table path");
+
+    write_virtual_row_num_file(
+        &table_path.join("b.parquet"),
+        vec![(20, 1), (21, 2), (22, 3), (23, 4)],
+    );
+    write_virtual_row_num_file(
+        &table_path.join("a.parquet"),
+        vec![(10, 5), (11, 6), (12, 7), (13, 8)],
+    );
+    write_virtual_row_num_file(
+        &table_path.join("c.parquet"),
+        vec![(30, 9), (31, 10), (32, 11), (33, 12)],
+    );
+
+    register_virtual_row_num_table(
+        test_ctx.session_ctx(),
+        "virtual_row_num_parquet",
+        ListingTableConfig::new(
+            ListingTableUrl::parse(table_path.to_str().unwrap())
+                .expect("listing table url"),
+        )
+        .with_listing_options(ListingOptions::new(Arc::new(ParquetFormat::default()))),
+    )
+    .await
+    .expect("virtual row num table registration");
+}
+
+fn write_virtual_row_num_file(path: &Path, rows: Vec<(i32, i32)>) {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("value", DataType::Int32, false),
+    ]));
+    let ids = rows.iter().map(|(id, _)| *id).collect::<Vec<_>>();
+    let values = rows.iter().map(|(_, value)| *value).collect::<Vec<_>>();
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(Int32Array::from(ids)) as ArrayRef,
+            Arc::new(Int32Array::from(values)) as ArrayRef,
+        ],
+    )
+    .expect("virtual row num batch");
+
+    let file = File::create(path).expect("virtual row num parquet file");
+    let props = WriterProperties::builder()
+        .set_max_row_group_row_count(Some(2))
+        .build();
+    let mut writer =
+        ArrowWriter::try_new(file, schema, Some(props)).expect("virtual row num writer");
+    writer.write(&batch).expect("virtual row num write");
+    writer.close().expect("virtual row num close");
 }
 
 /// Generate a partitioned CSV file and register it with an execution context

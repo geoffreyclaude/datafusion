@@ -2616,6 +2616,7 @@ dependencies = [
  "datafusion",
  "datafusion-spark",
  "datafusion-substrait",
+ "datafusion-virtual-row-num-poc",
  "env_logger",
  "futures",
  "half",
@@ -2623,6 +2624,7 @@ dependencies = [
  "itertools 0.14.0",
  "log",
  "object_store",
+ "parquet",
  "postgres-types",
  "regex",
  "sqllogictest",
@@ -2653,6 +2655,30 @@ dependencies = [
  "substrait",
  "tokio",
  "url",
+]
+
+[[package]]
+name = "datafusion-virtual-row-num-poc"
+version = "53.0.0"
+dependencies = [
+ "arrow",
+ "async-trait",
+ "datafusion",
+ "datafusion-catalog",
+ "datafusion-catalog-listing",
+ "datafusion-common",
+ "datafusion-datasource",
+ "datafusion-datasource-parquet",
+ "datafusion-execution",
+ "datafusion-expr",
+ "datafusion-physical-expr",
+ "datafusion-physical-expr-common",
+ "datafusion-physical-plan",
+ "futures",
+ "object_store",
+ "parquet",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

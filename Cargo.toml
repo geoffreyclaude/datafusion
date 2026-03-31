@@ -54,6 +54,7 @@ members = [
     "datafusion/spark",
     "datafusion/sql",
     "datafusion/sqllogictest",
+    "datafusion/virtual-row-num-poc",
     "datafusion/substrait",
     "datafusion/wasmtest",
     "datafusion-cli",
