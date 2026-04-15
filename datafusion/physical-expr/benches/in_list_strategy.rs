@@ -15,31 +15,35 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Focused benchmarks for InList optimizations
+//! Focused benchmarks for `InList` cases.
 //!
-//! This benchmark file provides targeted coverage of each optimization strategy
-//! with controlled parameters to ensure statistical robustness:
+//! This benchmark file adds targeted coverage for representative `IN LIST`
+//! workloads with controlled parameters:
 //!
-//! - **Controlled match rates**: Tests both "found" and "not found" code paths
-//! - **List size scaling**: Measures performance across different list sizes
-//! - **Strategy coverage**: Each optimization has dedicated benchmarks
-//! - **Reinterpret coverage**: Tests types that use zero-copy reinterpretation
-//! - **Stage 2 stress testing**: Prefix-collision strings for two-stage filters
-//! - **Null handling**: Tests null short-circuit optimization paths
+//! - **Controlled match rates**: Exercises both hit-heavy and miss-heavy paths
+//! - **List size scaling**: Measures behavior across small and large `IN` lists
+//! - **Type coverage**: Covers primitive, string, string-view, dictionary, and
+//!   fixed-size-binary inputs
+//! - **Shared-prefix strings**: Adds collision-heavy string cases where values
+//!   only differ late in the string
+//! - **Mixed-length strings**: Covers inputs that combine short and long values
+//! - **Null handling**: Includes representative `NULL` and `NOT IN` cases
 //!
-//! # Optimization Coverage
+//! # Case Coverage
 //!
-//! | Strategy | Types | Threshold | List Sizes Tested |
-//! |----------|-------|-----------|-------------------|
-//! | BitmapFilter (stack) | UInt8 | always | 4, 16 |
-//! | BitmapFilter (heap) | Int16 | always | 4, 64, 256 |
-//! | BranchlessFilter | Int32, Float32 | ≤32 | 4, 32 |
-//! | DirectProbeFilter | Int32, Float32 | >32 | 64, 256 |
-//! | BranchlessFilter | Int64, TimestampNs | ≤16 | 4, 16 |
-//! | DirectProbeFilter | Int64, TimestampNs | >16 | 32, 128 |
-//! | Utf8TwoStageFilter | Utf8 | always | 4, 64, 256 |
-//! | ByteViewMaskedFilter | Utf8View | always | 4, 16, 64, 256 |
-//! | arrow_eq fallback | FixedSizeBinary(16) | always | 4, 64, 256, 10000 |
+//! | Case | Types | Characteristics | List Sizes Tested |
+//! |------|-------|-----------------|-------------------|
+//! | Narrow integer cases | UInt8 | small value domain | 4, 16 |
+//! | Narrow integer cases | Int16 | larger value domain | 4, 64, 256 |
+//! | 32-bit primitive cases | Int32, Float32 | small and large lists | 4, 32, 64, 256 |
+//! | 64-bit primitive cases | Int64, TimestampNs | small and large lists | 4, 16, 32, 128 |
+//! | Utf8 short-string cases | Utf8 | 8-byte strings | 4, 64, 256 |
+//! | Utf8 long-string cases | Utf8 | 24-byte strings | 4, 64, 256 |
+//! | Utf8View short-string cases | Utf8View | 8-byte strings | 4, 16, 64, 256 |
+//! | Utf8View length-12 cases | Utf8View | 12-byte strings | 16, 64 |
+//! | Utf8View long-string cases | Utf8View | 24-byte strings | 4, 16, 64, 256 |
+//! | Shared-prefix string cases | Utf8, Utf8View | same prefix, different suffix | 16, 32, 64 |
+//! | Fixed-size binary cases | FixedSizeBinary(16) | fixed-width binary values | 4, 64, 256, 10000 |
 
 use arrow::array::*;
 use arrow::datatypes::{Field, Int32Type, Schema};
@@ -250,9 +254,9 @@ where
     });
 }
 
-/// Benchmarks strings with shared prefixes to stress Stage 2 of two-stage filters.
+/// Benchmarks strings with shared prefixes and different suffixes.
 /// Uses variable prefix lengths and random suffixes to avoid bench-maxing.
-fn bench_string_prefix_collision<A>(
+fn bench_string_shared_prefix<A>(
     c: &mut Criterion,
     group: &str,
     name: &str,
@@ -268,10 +272,11 @@ fn bench_string_prefix_collision<A>(
         .wrapping_add(prefix_len as u64 * 0x4444);
     let mut rng = StdRng::seed_from_u64(seed);
 
-    // Generate IN list with shared prefix (forces Stage 2)
+    // Generate IN list with a shared prefix.
     let haystack = strings_with_shared_prefix(&mut rng, list_size, prefix_len);
 
-    // Generate non-matching strings with SAME prefix (will pass Stage 1, fail Stage 2)
+    // Generate non-matching strings with the same prefix to keep misses close
+    // to the matching set.
     let non_match_pool = strings_with_shared_prefix(&mut rng, 100, prefix_len);
 
     // Generate array with controlled match rate
@@ -297,8 +302,8 @@ fn bench_string_prefix_collision<A>(
     });
 }
 
-/// Benchmarks mixed-length strings (some short ≤12, some long >12).
-/// Tests the two-stage filter with realistic length distribution.
+/// Benchmarks mixed-length strings (some short <= 12, some long > 12).
+/// Uses a more realistic length distribution than the fixed-width cases.
 fn bench_string_mixed_lengths<A>(
     c: &mut Criterion,
     group: &str,
@@ -312,7 +317,7 @@ fn bench_string_mixed_lengths<A>(
     let seed = 0xABCD_EF01_u64.wrapping_add(list_size as u64 * 0x5555);
     let mut rng = StdRng::seed_from_u64(seed);
 
-    // Mixed lengths: some short (≤12), some long (>12)
+    // Mixed lengths: some short (<= 12), some long (> 12)
     let lengths = [4, 8, 12, 16, 20, 24];
 
     // Generate IN list with mixed lengths
@@ -348,18 +353,18 @@ fn bench_string_mixed_lengths<A>(
 }
 
 // =============================================================================
-// BITMAP FILTER BENCHMARKS (UInt8, Int16)
+// NARROW INTEGER CASE BENCHMARKS
 // =============================================================================
 
-fn bench_bitmap(c: &mut Criterion) {
-    // UInt8: 32-byte stack-allocated bitmap
+fn bench_narrow_integer(c: &mut Criterion) {
+    // UInt8: small value domain
     // NOTE: With 256 possible values, list_size=16 covers 6.25% of value space,
     // so even "match=0%" has ~6% accidental matches from random data.
     for list_size in [4, 16] {
         for match_pct in MATCH_RATES {
             bench_numeric::<u8, UInt8Array>(
                 c,
-                "bitmap",
+                "narrow_integer",
                 &format!("u8/list={list_size}/match={match_pct}%"),
                 &NumericBenchConfig::new(
                     list_size,
@@ -371,12 +376,12 @@ fn bench_bitmap(c: &mut Criterion) {
         }
     }
 
-    // Int16: 8KB heap-allocated bitmap (via zero-copy reinterpret)
+    // Int16: larger value domain with wider list sizes
     for list_size in [4, 64, 256] {
         for match_pct in MATCH_RATES {
             bench_numeric::<i16, Int16Array>(
                 c,
-                "bitmap",
+                "narrow_integer",
                 &format!("i16/list={list_size}/match={match_pct}%"),
                 &NumericBenchConfig::new(
                     list_size,
@@ -390,22 +395,22 @@ fn bench_bitmap(c: &mut Criterion) {
 }
 
 // =============================================================================
-// PRIMITIVE BENCHMARKS (Branchless vs Hash)
+// PRIMITIVE SIZE-SCALING BENCHMARKS
 // =============================================================================
 
 fn bench_primitive(c: &mut Criterion) {
-    // Int32: branchless threshold is 32
+    // Int32: small and larger list sizes
     for list_size in [4, 32, 64, 256] {
-        let strategy = if list_size <= 32 {
-            "branchless"
+        let list_case = if list_size <= 32 {
+            "small_list"
         } else {
-            "hash"
+            "large_list"
         };
         for match_pct in MATCH_RATES {
             bench_numeric::<i32, Int32Array>(
                 c,
                 "primitive",
-                &format!("i32/{strategy}/list={list_size}/match={match_pct}%"),
+                &format!("i32/{list_case}/list={list_size}/match={match_pct}%"),
                 &NumericBenchConfig::new(
                     list_size,
                     match_pct as f64 / 100.0,
@@ -416,18 +421,18 @@ fn bench_primitive(c: &mut Criterion) {
         }
     }
 
-    // Int64: branchless threshold is 16
+    // Int64: small and larger list sizes
     for list_size in [4, 16, 32, 128] {
-        let strategy = if list_size <= 16 {
-            "branchless"
+        let list_case = if list_size <= 16 {
+            "small_list"
         } else {
-            "hash"
+            "large_list"
         };
         for match_pct in MATCH_RATES {
             bench_numeric::<i64, Int64Array>(
                 c,
                 "primitive",
-                &format!("i64/{strategy}/list={list_size}/match={match_pct}%"),
+                &format!("i64/{list_case}/list={list_size}/match={match_pct}%"),
                 &NumericBenchConfig::new(
                     list_size,
                     match_pct as f64 / 100.0,
@@ -442,7 +447,7 @@ fn bench_primitive(c: &mut Criterion) {
     bench_numeric::<i32, Int32Array>(
         c,
         "primitive",
-        "i32/branchless/list=16/match=50%/NOT_IN",
+        "i32/small_list/list=16/match=50%/NOT_IN",
         &NumericBenchConfig::new(
             16,
             0.5,
@@ -454,23 +459,22 @@ fn bench_primitive(c: &mut Criterion) {
 }
 
 // =============================================================================
-// REINTERPRETED TYPE BENCHMARKS (Float32, TimestampNs)
+// FLOAT AND TIMESTAMP CASE BENCHMARKS
 // =============================================================================
 
-fn bench_reinterpret(c: &mut Criterion) {
-    // Float32: reinterpreted as u32, uses same branchless/hash strategies
-    // Threshold is 32 (same as Int32)
+fn bench_f32(c: &mut Criterion) {
+    // Float32: uses the same list sizes as the Int32 cases.
     for list_size in [4, 32, 64] {
-        let strategy = if list_size <= 32 {
-            "branchless"
+        let list_case = if list_size <= 32 {
+            "small_list"
         } else {
-            "hash"
+            "large_list"
         };
         for match_pct in MATCH_RATES {
             bench_numeric::<f32, Float32Array>(
                 c,
-                "reinterpret",
-                &format!("f32/{strategy}/list={list_size}/match={match_pct}%"),
+                "f32",
+                &format!("{list_case}/list={list_size}/match={match_pct}%"),
                 &NumericBenchConfig::new(
                     list_size,
                     match_pct as f64 / 100.0,
@@ -480,19 +484,21 @@ fn bench_reinterpret(c: &mut Criterion) {
             );
         }
     }
+}
 
-    // TimestampNanosecond: reinterpreted as i64, threshold is 16
+fn bench_timestamp_ns(c: &mut Criterion) {
+    // TimestampNanosecond: uses the same list sizes as the Int64-style cases.
     for list_size in [4, 16, 32] {
-        let strategy = if list_size <= 16 {
-            "branchless"
+        let list_case = if list_size <= 16 {
+            "small_list"
         } else {
-            "hash"
+            "large_list"
         };
         for match_pct in MATCH_RATES {
             bench_numeric::<i64, TimestampNanosecondArray>(
                 c,
-                "reinterpret",
-                &format!("timestamp_ns/{strategy}/list={list_size}/match={match_pct}%"),
+                "timestamp_ns",
+                &format!("{list_case}/list={list_size}/match={match_pct}%"),
                 &NumericBenchConfig::new(
                     list_size,
                     match_pct as f64 / 100.0,
@@ -505,13 +511,13 @@ fn bench_reinterpret(c: &mut Criterion) {
 }
 
 // =============================================================================
-// UTF8 TWO-STAGE FILTER BENCHMARKS
+// UTF8 STRING CASE BENCHMARKS
 // =============================================================================
 
 fn bench_utf8(c: &mut Criterion) {
     let to_scalar: fn(String) -> ScalarValue = |s| ScalarValue::Utf8(Some(s));
 
-    // Short strings (8 bytes < 12): Stage 1 definitive
+    // Short strings (8 bytes)
     for list_size in [4, 64, 256] {
         for match_pct in MATCH_RATES {
             bench_string::<StringArray>(
@@ -528,7 +534,7 @@ fn bench_utf8(c: &mut Criterion) {
         }
     }
 
-    // Long strings (24 bytes > 12): hits Stage 2
+    // Long strings (24 bytes)
     for list_size in [4, 64, 256] {
         for match_pct in MATCH_RATES {
             bench_string::<StringArray>(
@@ -559,11 +565,11 @@ fn bench_utf8(c: &mut Criterion) {
         }
     }
 
-    // Prefix collision: stresses Stage 2 comparison
-    bench_string_prefix_collision::<StringArray>(
+    // Shared-prefix strings: same prefix, different suffix
+    bench_string_shared_prefix::<StringArray>(
         c,
         "utf8",
-        "prefix_collision/pfx=12/list=32/match=50%",
+        "shared_prefix/pfx=12/list=32/match=50%",
         32,
         0.5,
         12,
@@ -580,13 +586,13 @@ fn bench_utf8(c: &mut Criterion) {
 }
 
 // =============================================================================
-// UTF8VIEW TWO-STAGE FILTER BENCHMARKS
+// UTF8VIEW STRING CASE BENCHMARKS
 // =============================================================================
 
 fn bench_utf8view(c: &mut Criterion) {
     let to_scalar: fn(String) -> ScalarValue = |s| ScalarValue::Utf8View(Some(s));
 
-    // Short strings (8 bytes ≤ 12): inline storage path
+    // Short strings (8 bytes)
     for list_size in [4, 16, 64, 256] {
         for match_pct in MATCH_RATES {
             bench_string::<StringViewArray>(
@@ -603,13 +609,13 @@ fn bench_utf8view(c: &mut Criterion) {
         }
     }
 
-    // Boundary strings (exactly 12 bytes): max inline size
+    // Length-12 strings
     for list_size in [16, 64] {
         for match_pct in MATCH_RATES {
             bench_string::<StringViewArray>(
                 c,
                 "utf8view",
-                &format!("boundary_12b/list={list_size}/match={match_pct}%"),
+                &format!("len_12b/list={list_size}/match={match_pct}%"),
                 &StringBenchConfig::new(
                     list_size,
                     match_pct as f64 / 100.0,
@@ -620,7 +626,7 @@ fn bench_utf8view(c: &mut Criterion) {
         }
     }
 
-    // Long strings (24 bytes > 12): out-of-line storage, two-stage filter
+    // Long strings (24 bytes)
     for list_size in [4, 16, 64, 256] {
         for match_pct in MATCH_RATES {
             bench_string::<StringViewArray>(
@@ -651,14 +657,14 @@ fn bench_utf8view(c: &mut Criterion) {
         }
     }
 
-    // Prefix collision: stresses Stage 2 comparison with varying prefix lengths
+    // Shared-prefix strings with varying prefix lengths
     for (prefix_len, list_size) in [(8, 16), (12, 32), (16, 64)] {
         for match_pct in MATCH_RATES {
-            bench_string_prefix_collision::<StringViewArray>(
+            bench_string_shared_prefix::<StringViewArray>(
                 c,
                 "utf8view",
                 &format!(
-                    "prefix_collision/pfx={prefix_len}/list={list_size}/match={match_pct}%"
+                    "shared_prefix/pfx={prefix_len}/list={list_size}/match={match_pct}%"
                 ),
                 list_size,
                 match_pct as f64 / 100.0,
@@ -756,7 +762,7 @@ fn bench_dict_string(
 }
 
 fn bench_dictionary(c: &mut Criterion) {
-    // Int32 dictionary: varying list sizes (tests branchless vs hash on values)
+    // Int32 dictionary: varying list sizes across dictionary values
     // Dictionary with 100 unique values
     for list_size in [4, 16, 64] {
         bench_dict_int32(
@@ -782,7 +788,7 @@ fn bench_dictionary(c: &mut Criterion) {
     // Int32 dictionary: NOT IN path
     bench_dict_int32(c, "i32/dict=100/list=16/NOT_IN", 100, 16, true);
 
-    // String dictionary: short strings (≤12 bytes, common for codes/categories)
+    // String dictionary: short strings (<= 12 bytes, common for codes/categories)
     for list_size in [8, 32] {
         bench_dict_string(
             c,
@@ -804,23 +810,18 @@ fn bench_dictionary(c: &mut Criterion) {
 // NULL HANDLING BENCHMARKS
 // =============================================================================
 //
-// Tests null short-circuit optimization paths in:
-// - build_in_list_result: computes contains for ALL positions, masks via bitmap ops
-// - build_in_list_result_with_null_shortcircuit: skips contains for null positions
-//
-// The shortcircuit is beneficial for expensive contains checks (strings) but
-// adds branch overhead for cheap checks (primitives).
+// Tests representative null-containing inputs across primitive and string cases.
 
 fn bench_nulls(c: &mut Criterion) {
     // =========================================================================
-    // PRIMITIVE TYPES: Tests build_in_list_result (no shortcircuit)
+    // PRIMITIVE CASES
     // =========================================================================
 
-    // BitmapFilter with nulls
+    // UInt8 case with nulls
     bench_numeric::<u8, UInt8Array>(
         c,
         "nulls",
-        "bitmap/u8/list=16/match=50%/nulls=20%",
+        "narrow_integer/u8/list=16/match=50%/nulls=20%",
         &NumericBenchConfig::new(
             16,
             0.5,
@@ -830,11 +831,11 @@ fn bench_nulls(c: &mut Criterion) {
         .with_null_rate(0.2),
     );
 
-    // BranchlessFilter with nulls
+    // Int32 small-list case with nulls
     bench_numeric::<i32, Int32Array>(
         c,
         "nulls",
-        "branchless/i32/list=16/match=50%/nulls=20%",
+        "primitive/i32/small_list/list=16/match=50%/nulls=20%",
         &NumericBenchConfig::new(
             16,
             0.5,
@@ -844,11 +845,11 @@ fn bench_nulls(c: &mut Criterion) {
         .with_null_rate(0.2),
     );
 
-    // DirectProbeFilter with nulls
+    // Int32 large-list case with nulls
     bench_numeric::<i32, Int32Array>(
         c,
         "nulls",
-        "hash/i32/list=64/match=50%/nulls=20%",
+        "primitive/i32/large_list/list=64/match=50%/nulls=20%",
         &NumericBenchConfig::new(
             64,
             0.5,
@@ -859,13 +860,13 @@ fn bench_nulls(c: &mut Criterion) {
     );
 
     // =========================================================================
-    // STRING TYPES: Tests build_in_list_result_with_null_shortcircuit
+    // STRING CASES
     // =========================================================================
 
     let utf8_scalar: fn(String) -> ScalarValue = |s| ScalarValue::Utf8(Some(s));
     let utf8view_scalar: fn(String) -> ScalarValue = |s| ScalarValue::Utf8View(Some(s));
 
-    // Utf8TwoStageFilter with nulls (short strings)
+    // Utf8 short-string case with nulls
     bench_string::<StringArray>(
         c,
         "nulls",
@@ -873,7 +874,7 @@ fn bench_nulls(c: &mut Criterion) {
         &StringBenchConfig::new(16, 0.5, 8, utf8_scalar).with_null_rate(0.2),
     );
 
-    // Utf8TwoStageFilter with nulls (long strings - Stage 2)
+    // Utf8 long-string case with nulls
     bench_string::<StringArray>(
         c,
         "nulls",
@@ -881,7 +882,7 @@ fn bench_nulls(c: &mut Criterion) {
         &StringBenchConfig::new(16, 0.5, 24, utf8_scalar).with_null_rate(0.2),
     );
 
-    // ByteViewMaskedFilter with nulls (short strings - inline)
+    // Utf8View short-string case with nulls
     bench_string::<StringViewArray>(
         c,
         "nulls",
@@ -889,7 +890,7 @@ fn bench_nulls(c: &mut Criterion) {
         &StringBenchConfig::new(16, 0.5, 8, utf8view_scalar).with_null_rate(0.2),
     );
 
-    // ByteViewMaskedFilter with nulls (long strings - out-of-line)
+    // Utf8View long-string case with nulls
     bench_string::<StringViewArray>(
         c,
         "nulls",
@@ -898,14 +899,14 @@ fn bench_nulls(c: &mut Criterion) {
     );
 
     // =========================================================================
-    // NOT IN WITH NULLS: Tests negated path with null propagation
+    // NOT IN CASES WITH NULLS
     // =========================================================================
 
-    // Primitive NOT IN with nulls
+    // Primitive NOT IN case with nulls
     bench_numeric::<i32, Int32Array>(
         c,
         "nulls",
-        "branchless/i32/list=16/match=50%/nulls=20%/NOT_IN",
+        "primitive/i32/small_list/list=16/match=50%/nulls=20%/NOT_IN",
         &NumericBenchConfig::new(
             16,
             0.5,
@@ -916,7 +917,7 @@ fn bench_nulls(c: &mut Criterion) {
         .with_negated(),
     );
 
-    // String NOT IN with nulls
+    // String NOT IN case with nulls
     bench_string::<StringViewArray>(
         c,
         "nulls",
@@ -927,14 +928,14 @@ fn bench_nulls(c: &mut Criterion) {
     );
 
     // =========================================================================
-    // HIGH NULL RATE: Stress test null handling paths
+    // HIGH NULL-RATE CASES
     // =========================================================================
 
     // 50% nulls - half the array is null
     bench_numeric::<i32, Int32Array>(
         c,
         "nulls",
-        "branchless/i32/list=16/match=50%/nulls=50%",
+        "primitive/i32/small_list/list=16/match=50%/nulls=50%",
         &NumericBenchConfig::new(
             16,
             0.5,
@@ -1030,7 +1031,7 @@ fn bench_fixed_size_binary(c: &mut Criterion) {
 criterion_group! {
     name = benches;
     config = Criterion::default();
-    targets = bench_bitmap, bench_primitive, bench_reinterpret, bench_utf8, bench_utf8view, bench_dictionary, bench_nulls, bench_fixed_size_binary
+    targets = bench_narrow_integer, bench_primitive, bench_f32, bench_timestamp_ns, bench_utf8, bench_utf8view, bench_dictionary, bench_nulls, bench_fixed_size_binary
 }
 
 criterion_main!(benches);
