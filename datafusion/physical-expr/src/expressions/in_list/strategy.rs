@@ -23,7 +23,7 @@ use arrow::array::ArrayRef;
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
 
-use super::nested_filter::ArrayStaticFilter;
+use super::nested_filter::NestedTypeFilter;
 use super::primitive_filter::*;
 use super::static_filter::StaticFilter;
 
@@ -45,6 +45,6 @@ pub(crate) fn instantiate_static_filter(
         DataType::UInt64 => Ok(Arc::new(UInt64StaticFilter::try_new(&in_array)?)),
         DataType::Float32 => Ok(Arc::new(Float32StaticFilter::try_new(&in_array)?)),
         DataType::Float64 => Ok(Arc::new(Float64StaticFilter::try_new(&in_array)?)),
-        _ => Ok(Arc::new(ArrayStaticFilter::try_new(in_array)?)),
+        _ => Ok(Arc::new(NestedTypeFilter::try_new(in_array)?)),
     }
 }

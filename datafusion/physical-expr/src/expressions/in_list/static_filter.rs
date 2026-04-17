@@ -30,7 +30,7 @@ use datafusion_common::Result;
 /// - [`super::primitive_filter::BranchlessFilter`]: Unrolled OR-chain for small lists
 /// - [`super::primitive_filter::DirectProbeFilter`]: O(1) hash lookups for larger primitive types
 /// - [`super::transform::Utf8TwoStageFilter`]: Two-stage filter for Utf8/LargeUtf8
-/// - [`super::nested_filter::ArrayStaticFilter`]: Dynamic comparator for unsupported types
+/// - [`super::nested_filter::NestedTypeFilter`]: Dynamic comparator for complex types
 pub(crate) trait StaticFilter {
     /// Returns the number of null values in the filter's haystack.
     fn null_count(&self) -> usize;
