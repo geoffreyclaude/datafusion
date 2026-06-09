@@ -1234,7 +1234,10 @@ impl ExecutionPlan for SortExec {
                     context.runtime_env(),
                     &self.metrics_set,
                     Arc::clone(&unwrap_or_internal_err!(filter)),
-                )?;
+                )?
+                .with_complete_filter_on_emit(
+                    self.cache.output_partitioning().partition_count() == 1,
+                );
                 Ok(Box::pin(RecordBatchStreamAdapter::new(
                     self.schema(),
                     futures::stream::once(async move {

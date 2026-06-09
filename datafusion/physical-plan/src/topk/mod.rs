@@ -126,6 +126,8 @@ pub struct TopK {
     common_sort_prefix: Arc<[PhysicalSortExpr]>,
     /// Filter matching the state of the `TopK` heap used for dynamic filter pushdown
     filter: Arc<RwLock<TopKDynamicFilters>>,
+    /// Whether this `TopK` owns completion of the shared dynamic filter.
+    complete_filter_on_emit: bool,
     /// If true, indicates that all rows of subsequent batches are guaranteed
     /// to be greater (by byte order, after row conversion) than the top K,
     /// which means the top K won't change and the computation can be finished early.
@@ -141,6 +143,11 @@ pub struct TopKDynamicFilters {
     /// This is shared across all partitions and is updated by any of them.
     /// Stored as row bytes for efficient comparison.
     threshold_row: Option<Vec<u8>>,
+    /// The common-prefix projection of [`Self::threshold_row`].
+    ///
+    /// This lets each partition stop from a globally established TopK threshold
+    /// even if its local heap has not filled yet.
+    prefix_threshold_row: Option<Vec<u8>>,
     /// The expression used to evaluate the dynamic filter
     /// Only updated when lock held for the duration of the update
     expr: Arc<DynamicFilterPhysicalExpr>,
@@ -151,6 +158,7 @@ impl TopKDynamicFilters {
     pub fn new(expr: Arc<DynamicFilterPhysicalExpr>) -> Self {
         Self {
             threshold_row: None,
+            prefix_threshold_row: None,
             expr,
         }
     }
@@ -226,7 +234,20 @@ impl TopK {
             common_sort_prefix: Arc::from(common_sort_prefix),
             finished: false,
             filter,
+            complete_filter_on_emit: true,
         })
+    }
+
+    /// Controls whether [`Self::emit`] marks the shared dynamic filter as
+    /// complete.
+    ///
+    /// A partition-preserving `SortExec` creates one local `TopK` per input
+    /// partition. Those local TopKs share one dynamic filter, so no single
+    /// partition should mark it complete while sibling partitions can still
+    /// tighten it.
+    pub fn with_complete_filter_on_emit(mut self, complete_filter_on_emit: bool) -> Self {
+        self.complete_filter_on_emit = complete_filter_on_emit;
+        self
     }
 
     /// Insert `batch`, remembering if any of its values are among
@@ -320,6 +341,10 @@ impl TopK {
             self.update_filter()?;
         }
 
+        if replacements == 0 {
+            self.attempt_early_completion(&batch)?;
+        }
+
         Ok(())
     }
 
@@ -362,6 +387,7 @@ impl TopK {
         };
 
         let new_threshold_row = &max_row.row;
+        let new_prefix_threshold_row = self.compute_row_prefix(max_row)?;
 
         // Fast path: check if the current value in topk is better than what is
         // currently set in the filter with a read only lock
@@ -403,6 +429,7 @@ impl TopK {
                 // new threshold is still better than the old one
                 if new_threshold.as_slice() < old_threshold.as_slice() {
                     filter.threshold_row = Some(new_threshold);
+                    filter.prefix_threshold_row = new_prefix_threshold_row;
                 } else {
                     // some other thread updated the threshold to a better
                     // one while we were building so there is no need to
@@ -414,6 +441,7 @@ impl TopK {
             None => {
                 // No previous threshold, so we can set the new one
                 filter.threshold_row = Some(new_threshold);
+                filter.prefix_threshold_row = new_prefix_threshold_row;
             }
         };
 
@@ -513,10 +541,12 @@ impl TopK {
         Ok(dynamic_predicate)
     }
 
-    /// If input ordering shares a common sort prefix with the TopK, and if the TopK's heap is full,
+    /// If input ordering shares a common sort prefix with the TopK,
     /// check if the computation can be finished early.
-    /// This is the case if the last row of the current batch is strictly greater than the max row in the heap,
-    /// comparing only on the shared prefix columns.
+    ///
+    /// This is the case if the last row of the current batch is strictly
+    /// greater than either the global TopK threshold prefix or the max row in
+    /// the local heap, comparing only on the shared prefix columns.
     fn attempt_early_completion(&mut self, batch: &RecordBatch) -> Result<()> {
         // Early exit if the batch is empty as there is no last row to extract from it.
         if batch.num_rows() == 0 {
@@ -529,39 +559,62 @@ impl TopK {
             return Ok(());
         };
 
-        // Early exit if the heap is not full (`heap.max()` only returns `Some` if the heap is full).
-        let Some(max_topk_row) = self.heap.max() else {
-            return Ok(());
-        };
-
         // Evaluate the prefix for the last row of the current batch.
         let last_row_idx = batch.num_rows() - 1;
         let mut batch_prefix_scratch =
             prefix_converter.empty_rows(1, ESTIMATED_BYTES_PER_ROW); // 1 row with capacity ESTIMATED_BYTES_PER_ROW
 
         self.compute_common_sort_prefix(batch, last_row_idx, &mut batch_prefix_scratch)?;
+        let batch_prefix_row = batch_prefix_scratch.row(0);
+        let batch_prefix = batch_prefix_row.as_ref();
+
+        let finished_by_global_threshold = self
+            .filter
+            .read()
+            .prefix_threshold_row
+            .as_ref()
+            .map(|threshold| batch_prefix > threshold.as_slice())
+            .unwrap_or(false);
+        if finished_by_global_threshold {
+            self.finished = true;
+            return Ok(());
+        }
+
+        // Early exit if the heap is not full (`heap.max()` only returns `Some` if the heap is full).
+        let Some(max_topk_row) = self.heap.max() else {
+            return Ok(());
+        };
 
         // Retrieve the max row from the heap.
-        let store_entry = self
-            .heap
-            .store
-            .get(max_topk_row.batch_id)
-            .ok_or(internal_datafusion_err!("Invalid batch id in topK heap"))?;
-        let max_batch = &store_entry.batch;
-        let mut heap_prefix_scratch =
-            prefix_converter.empty_rows(1, ESTIMATED_BYTES_PER_ROW); // 1 row with capacity ESTIMATED_BYTES_PER_ROW
-        self.compute_common_sort_prefix(
-            max_batch,
-            max_topk_row.index,
-            &mut heap_prefix_scratch,
-        )?;
+        let Some(heap_prefix_row) = self.compute_row_prefix(max_topk_row)? else {
+            return Ok(());
+        };
 
         // If the last row's prefix is strictly greater than the max prefix, mark as finished.
-        if batch_prefix_scratch.row(0).as_ref() > heap_prefix_scratch.row(0).as_ref() {
+        if batch_prefix > heap_prefix_row.as_slice() {
             self.finished = true;
         }
 
         Ok(())
+    }
+
+    fn compute_row_prefix(&self, topk_row: &TopKRow) -> Result<Option<Vec<u8>>> {
+        let Some(prefix_converter) = &self.common_sort_prefix_converter else {
+            return Ok(None);
+        };
+
+        let store_entry = self
+            .heap
+            .store
+            .get(topk_row.batch_id)
+            .ok_or(internal_datafusion_err!("Invalid batch id in topK heap"))?;
+        let mut scratch = prefix_converter.empty_rows(1, ESTIMATED_BYTES_PER_ROW);
+        self.compute_common_sort_prefix(
+            &store_entry.batch,
+            topk_row.index,
+            &mut scratch,
+        )?;
+        Ok(Some(scratch.row(0).as_ref().to_vec()))
     }
 
     // Helper function to compute the prefix for a given batch and row index, storing the result in scratch.
@@ -603,11 +656,14 @@ impl TopK {
             common_sort_prefix: _,
             finished: _,
             filter,
+            complete_filter_on_emit,
         } = self;
         let _timer = metrics.baseline.elapsed_compute().timer(); // time updated on drop
 
         // Mark the dynamic filter as complete now that TopK processing is finished.
-        filter.read().expr().mark_complete();
+        if complete_filter_on_emit {
+            filter.read().expr().mark_complete();
+        }
 
         // break into record batches as needed
         let mut batches = vec![];
@@ -1291,6 +1347,270 @@ mod tests {
                 "+---+------+",
             ],
             &results
+        );
+
+        Ok(())
+    }
+
+    fn make_two_column_topk(
+        partition_id: usize,
+        schema: SchemaRef,
+        filter: Arc<RwLock<TopKDynamicFilters>>,
+    ) -> Result<TopK> {
+        make_two_column_topk_with_options(
+            partition_id,
+            schema,
+            filter,
+            SortOptions::default(),
+            SortOptions::default(),
+            true,
+        )
+    }
+
+    fn make_two_column_topk_with_options(
+        partition_id: usize,
+        schema: SchemaRef,
+        filter: Arc<RwLock<TopKDynamicFilters>>,
+        a_options: SortOptions,
+        b_options: SortOptions,
+        use_prefix: bool,
+    ) -> Result<TopK> {
+        let sort_expr_a = PhysicalSortExpr {
+            expr: col("a", schema.as_ref())?,
+            options: a_options,
+        };
+        let sort_expr_b = PhysicalSortExpr {
+            expr: col("b", schema.as_ref())?,
+            options: b_options,
+        };
+        let prefix = if use_prefix {
+            vec![sort_expr_a.clone()]
+        } else {
+            vec![]
+        };
+
+        TopK::try_new(
+            partition_id,
+            schema,
+            prefix,
+            LexOrdering::from([sort_expr_a, sort_expr_b]),
+            3,
+            2,
+            Arc::new(RuntimeEnv::default()),
+            &ExecutionPlanMetricsSet::new(),
+            filter,
+        )
+    }
+
+    fn make_two_column_batch(
+        schema: SchemaRef,
+        a: Vec<Option<i32>>,
+        b: Vec<f64>,
+    ) -> Result<RecordBatch> {
+        Ok(RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from(a)) as ArrayRef,
+                Arc::new(Float64Array::from(b)) as ArrayRef,
+            ],
+        )?)
+    }
+
+    /// A partition can see the shared dynamic filter tightened by another
+    /// partition before its own local heap has `k` rows. In that case the global
+    /// prefix threshold must be enough to stop the partition; otherwise it drains
+    /// the rest of its sorted input even though no row can improve the final
+    /// TopK.
+    #[tokio::test]
+    async fn test_shared_filter_can_finish_partition_before_local_heap_is_full()
+    -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Float64, false),
+        ]));
+        let filter = Arc::new(RwLock::new(TopKDynamicFilters::new(Arc::new(
+            DynamicFilterPhysicalExpr::new(vec![], lit(true)),
+        ))));
+
+        let mut partition_0 =
+            make_two_column_topk(0, Arc::clone(&schema), Arc::clone(&filter))?;
+        partition_0.insert_batch(make_two_column_batch(
+            Arc::clone(&schema),
+            vec![Some(1), Some(1), Some(2)],
+            vec![20.0, 15.0, 30.0],
+        )?)?;
+        assert!(filter.read().prefix_threshold_row.is_some());
+
+        let mut partition_1 =
+            make_two_column_topk(1, Arc::clone(&schema), Arc::clone(&filter))?;
+        partition_1.insert_batch(make_two_column_batch(
+            Arc::clone(&schema),
+            vec![Some(3), Some(3)],
+            vec![10.0, 20.0],
+        )?)?;
+
+        assert!(
+            partition_1.heap.max().is_none(),
+            "local heap is intentionally not full"
+        );
+        assert!(
+            partition_1.finished,
+            "global prefix threshold should finish the partition"
+        );
+
+        let results: Vec<_> = partition_1.emit()?.try_collect().await?;
+        assert!(results.is_empty());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_shared_filter_does_not_finish_on_equal_prefix() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Float64, false),
+        ]));
+        let filter = Arc::new(RwLock::new(TopKDynamicFilters::new(Arc::new(
+            DynamicFilterPhysicalExpr::new(vec![], lit(true)),
+        ))));
+
+        let mut partition_0 =
+            make_two_column_topk(0, Arc::clone(&schema), Arc::clone(&filter))?;
+        partition_0.insert_batch(make_two_column_batch(
+            Arc::clone(&schema),
+            vec![Some(1), Some(1), Some(2)],
+            vec![20.0, 15.0, 30.0],
+        )?)?;
+
+        let mut partition_1 =
+            make_two_column_topk(1, Arc::clone(&schema), Arc::clone(&filter))?;
+        partition_1.insert_batch(make_two_column_batch(
+            Arc::clone(&schema),
+            vec![Some(2), Some(2)],
+            vec![40.0, 50.0],
+        )?)?;
+
+        assert!(
+            !partition_1.finished,
+            "equal prefix is not enough to prove future rows cannot improve the suffix"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_all_filtered_batch_without_common_prefix_does_not_finish() -> Result<()>
+    {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Float64, false),
+        ]));
+        let filter = Arc::new(RwLock::new(TopKDynamicFilters::new(Arc::new(
+            DynamicFilterPhysicalExpr::new(vec![], lit(false)),
+        ))));
+        let mut topk = make_two_column_topk_with_options(
+            0,
+            Arc::clone(&schema),
+            filter,
+            SortOptions::default(),
+            SortOptions::default(),
+            false,
+        )?;
+
+        topk.insert_batch(make_two_column_batch(
+            Arc::clone(&schema),
+            vec![Some(3), Some(3)],
+            vec![10.0, 20.0],
+        )?)?;
+        assert!(!topk.finished);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_global_prefix_completion_respects_descending_and_null_ordering()
+    -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Float64, false),
+        ]));
+
+        let desc_filter = Arc::new(RwLock::new(TopKDynamicFilters::new(Arc::new(
+            DynamicFilterPhysicalExpr::new(vec![], lit(true)),
+        ))));
+        let desc_options = SortOptions {
+            descending: true,
+            nulls_first: true,
+        };
+        let mut desc_partition_0 = make_two_column_topk_with_options(
+            0,
+            Arc::clone(&schema),
+            Arc::clone(&desc_filter),
+            desc_options,
+            SortOptions::default(),
+            true,
+        )?;
+        desc_partition_0.insert_batch(make_two_column_batch(
+            Arc::clone(&schema),
+            vec![Some(10), Some(10), Some(9)],
+            vec![1.0, 2.0, 3.0],
+        )?)?;
+
+        let mut desc_partition_1 = make_two_column_topk_with_options(
+            1,
+            Arc::clone(&schema),
+            Arc::clone(&desc_filter),
+            desc_options,
+            SortOptions::default(),
+            true,
+        )?;
+        desc_partition_1.insert_batch(make_two_column_batch(
+            Arc::clone(&schema),
+            vec![Some(8), Some(8)],
+            vec![1.0, 2.0],
+        )?)?;
+        assert!(
+            desc_partition_1.finished,
+            "descending prefix comparison should use sort-order row encoding"
+        );
+
+        let nulls_last_filter = Arc::new(RwLock::new(TopKDynamicFilters::new(Arc::new(
+            DynamicFilterPhysicalExpr::new(vec![], lit(true)),
+        ))));
+        let nulls_last_options = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        let mut null_partition_0 = make_two_column_topk_with_options(
+            0,
+            Arc::clone(&schema),
+            Arc::clone(&nulls_last_filter),
+            nulls_last_options,
+            SortOptions::default(),
+            true,
+        )?;
+        null_partition_0.insert_batch(make_two_column_batch(
+            Arc::clone(&schema),
+            vec![Some(1), Some(1), Some(2)],
+            vec![20.0, 15.0, 30.0],
+        )?)?;
+
+        let mut null_partition_1 = make_two_column_topk_with_options(
+            1,
+            Arc::clone(&schema),
+            Arc::clone(&nulls_last_filter),
+            nulls_last_options,
+            SortOptions::default(),
+            true,
+        )?;
+        null_partition_1.insert_batch(make_two_column_batch(
+            Arc::clone(&schema),
+            vec![None, None],
+            vec![10.0, 20.0],
+        )?)?;
+        assert!(
+            null_partition_1.finished,
+            "NULLS LAST prefix comparison should use sort-order row encoding"
         );
 
         Ok(())
