@@ -1,5 +1,7 @@
 data
 data_csv
 results
+!slice-search/results/
+!slice-search/results/*.txt
 venv
 !sql_benchmarks/**/results/
