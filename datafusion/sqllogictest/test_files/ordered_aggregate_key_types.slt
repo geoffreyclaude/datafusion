@@ -85,7 +85,7 @@ GROUP BY ts_ns, ts_ms, d32, d64, d128, d256, b,
   date32, date64, time32, time64, duration, iym, idt, imdn;
 ----
 physical_plan
-01)AggregateExec: mode=Single,<slt:ignore>ordering_mode=Sorted
+01)AggregateExec: mode=Single,<slt:ignore>group_clustering_mode=Full
 <slt:ignore>
 
 # Unordered reference. FILTER must also prevent division by zero.
@@ -128,9 +128,9 @@ GROUP BY ts_ns, ts_ms, d32, d64, d128, d256, b,
   date32, date64, time32, time64, duration, iym, idt, imdn;
 ----
 physical_plan
-01)AggregateExec: mode=FinalPartitioned,<slt:ignore>ordering_mode=Sorted
+01)AggregateExec: mode=FinalPartitioned,<slt:ignore>group_clustering_mode=Full
 02)--RepartitionExec:<slt:ignore>maintains_sort_order=true<slt:ignore>
-03)----AggregateExec: mode=Partial,<slt:ignore>ordering_mode=Sorted
+03)----AggregateExec: mode=Partial,<slt:ignore>group_clustering_mode=Full
 <slt:ignore>
 
 query IR?IIII rowsort ordered-key-types

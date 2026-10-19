@@ -499,7 +499,7 @@ async fn fully_ordered_context(
         .await?;
     let description = displayable(plan.as_ref()).indent(true).to_string();
     assert!(
-        description.contains("ordering_mode=Sorted"),
+        description.contains("group_clustering_mode=Full"),
         "{description}"
     );
     // Input is already sorted in one partition. Fail if the planner adds
