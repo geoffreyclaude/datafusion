@@ -39,7 +39,7 @@ use crate::filter_pushdown::{
 use crate::limit::LimitStream;
 use crate::metrics::{
     BaselineMetrics, ElapsedComputeFutureExt, ExecutionPlanMetricsSet, MetricsSet,
-    SpillMetrics,
+    SpillMetrics, Time,
 };
 use crate::projection::{ProjectionExec, make_with_child, update_ordering};
 use crate::sorts::IncrementalSortIterator;
@@ -80,11 +80,13 @@ use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::expressions::{DynamicFilterPhysicalExpr, lit};
 
-use futures::{Stream, StreamExt, TryStreamExt};
+use futures::{StreamExt, TryStreamExt};
 use log::{debug, trace};
 use tokio::runtime::{Handle, RuntimeFlavor};
 use tokio::sync::Semaphore;
 
+#[cfg(test)]
+mod group_tests;
 #[cfg(test)]
 mod spill_tests;
 
@@ -107,10 +109,9 @@ impl ExternalSorterMetrics {
 /// Limits concurrent batch sorting across the partitions of one [`SortExec`].
 #[derive(Debug, Clone)]
 struct SortConcurrency {
-    /// Each partition can use the full concurrency budget, but queues at most this
-    /// many jobs so it cannot put all its runs ahead of other partitions.
+    /// Each partition divides its runs into at most this many contiguous groups.
     per_partition_limit: usize,
-    /// Shared budget: a job holds a permit until its run has been sorted.
+    /// Shared budget: a job holds a permit until its group has been sorted.
     permits: Arc<Semaphore>,
 }
 
@@ -784,73 +785,128 @@ impl ExternalSorter {
             .build()
     }
 
-    /// Sort runs concurrently, preserving their order for the merge's equal-key ties.
+    /// Sort contiguous groups concurrently, preserving input stream order for the merge.
     async fn prepare_sort_runs(
         &mut self,
         runs: Vec<RecordBatch>,
         concurrency: &SortConcurrency,
     ) -> Result<Vec<SendableRecordBatchStream>> {
-        let run_count = runs.len();
         let (sizes, shared_input_size) = self.sort_run_sizes(&runs)?;
+        let group_lengths =
+            Self::sort_run_group_lengths(&sizes, concurrency.per_partition_limit);
         let shared_input =
             shared_input_size.map(|size| Arc::new(self.reservation.split(size)));
+        // Keep unsorted runs charged, splitting their reservations only as each
+        // group reaches them. Groups own the resources needed by their tasks.
+        let reservation = Arc::new(self.reservation.take());
+        let mut runs = runs.into_iter().zip(sizes);
+        let expressions = self.expr.clone();
+        let batch_size = self.batch_size;
+        let merge_pool = Arc::clone(&self.merge_pool);
+        let elapsed_compute = self.metrics.baseline.elapsed_compute().clone();
+        let jobs = group_lengths.into_iter().map(move |group_length| {
+            let group: Vec<_> = runs.by_ref().take(group_length).collect();
+            let reservation = Arc::clone(&reservation);
+            let shared_input = shared_input.clone();
+            let expressions = expressions.clone();
+            let merge_pool = Arc::clone(&merge_pool);
+            let elapsed_compute = elapsed_compute.clone();
+            let sorts = group.into_iter().map(move |(batch, size)| {
+                let _timer = elapsed_compute.timer();
+                Self::sort_run_with_resources(
+                    batch,
+                    reservation.split(size),
+                    shared_input.clone(),
+                    expressions.clone(),
+                    batch_size,
+                    Arc::clone(&merge_pool),
+                    elapsed_compute.clone(),
+                )
+            });
+            Ok::<_, DataFusionError>(Self::prepare_sort_run_group(
+                Self::sort_run_group(sorts),
+                Arc::clone(&concurrency.permits),
+            ))
+        });
+        // There are at most `per_partition_limit` groups, so ordered buffering
+        // starts every group while preserving the original run order.
         let jobs =
-            runs.into_iter()
-                .zip(sizes)
-                .enumerate()
-                .map(move |(index, (batch, size))| {
-                    let reservation = self.reservation.split(size);
-                    let sort = self.sort_run(batch, reservation, shared_input.clone())?;
-                    let permits = Arc::clone(&concurrency.permits);
-                    Ok::<_, DataFusionError>(async move {
-                        let stream = Self::prepare_sort_run(sort, permits).await?;
-                        Ok((index, stream))
-                    })
-                });
-        // Ordered buffering would keep completed runs behind a slow earlier run,
-        // filling the window and preventing new jobs from starting.
-        let jobs = futures::stream::iter(jobs)
-            .try_buffer_unordered(concurrency.per_partition_limit);
-        Self::collect_prepared_runs(run_count, jobs).await
-    }
-
-    /// Restore input order because the merge uses it to break equal-key ties.
-    async fn collect_prepared_runs(
-        run_count: usize,
-        mut jobs: impl Stream<Item = Result<(usize, SendableRecordBatchStream)>> + Unpin,
-    ) -> Result<Vec<SendableRecordBatchStream>> {
-        let mut streams: Vec<_> = (0..run_count).map(|_| None).collect();
-        while let Some((index, stream)) = jobs.try_next().await? {
-            streams[index] = Some(stream);
-        }
-        streams
+            futures::stream::iter(jobs).try_buffered(concurrency.per_partition_limit);
+        Ok(jobs
+            .try_collect::<Vec<_>>()
+            .await?
             .into_iter()
-            .collect::<Option<Vec<_>>>()
-            .ok_or_else(|| internal_datafusion_err!("Missing prepared sort run"))
+            .flatten()
+            .collect())
     }
 
-    /// Sort one run under a shared permit, retaining its output reservations.
+    /// Divide runs into nonempty contiguous groups with approximately equal
+    /// reservation sizes. An indivisible large run can make a group larger.
+    fn sort_run_group_lengths(sizes: &[usize], limit: usize) -> Vec<usize> {
+        let group_count = sizes.len().min(limit);
+        let mut groups = Vec::with_capacity(group_count);
+        let mut remaining_bytes: usize = sizes.iter().sum();
+        let mut start = 0;
+        for groups_left in (1..=group_count).rev() {
+            if groups_left == 1 {
+                groups.push(sizes.len() - start);
+                break;
+            }
+            let target = remaining_bytes.div_ceil(groups_left);
+            let max_end = sizes.len() - (groups_left - 1);
+            let mut end = start + 1;
+            let mut bytes = sizes[start];
+            while end < max_end {
+                let next_bytes = bytes + sizes[end];
+                if next_bytes.abs_diff(target) > bytes.abs_diff(target) {
+                    break;
+                }
+                bytes = next_bytes;
+                end += 1;
+            }
+            groups.push(end - start);
+            start = end;
+            remaining_bytes -= bytes;
+        }
+        groups
+    }
+
+    /// Sort a group's runs sequentially, retaining each output's reservations.
+    async fn sort_run_group(
+        sorts: impl Iterator<
+            Item = Result<impl Future<Output = Result<SendableRecordBatchStream>>>,
+        >,
+    ) -> Result<Vec<SendableRecordBatchStream>> {
+        let mut streams = Vec::new();
+        for sort in sorts {
+            streams.push(Self::with_lookahead(sort?.await?));
+            // CPU-bound sorting does not otherwise yield to other runtime tasks.
+            tokio::task::yield_now().await;
+        }
+        Ok(streams)
+    }
+
+    /// Sort one group under a shared permit, retaining its output reservations.
     ///
-    /// The sort must finish independently of other runs and partitions so its
+    /// The group must finish independently of other groups and partitions so its
     /// permit can be returned before the merge starts consuming output.
-    async fn prepare_sort_run(
-        sort: impl Future<Output = Result<SendableRecordBatchStream>> + Send + 'static,
+    async fn prepare_sort_run_group(
+        sort: impl Future<Output = Result<Vec<SendableRecordBatchStream>>> + Send + 'static,
         permits: Arc<Semaphore>,
-    ) -> Result<SendableRecordBatchStream> {
-        // Acquire before spawning so queued runs do not become Tokio tasks.
+    ) -> Result<Vec<SendableRecordBatchStream>> {
+        // Acquire before spawning so queued groups do not become Tokio tasks.
         let permit = permits
             .acquire_owned()
             .await
             .map_err(|e| internal_datafusion_err!("Sort concurrency closed: {e}"))?;
-        let stream = SpawnedTask::spawn(async move {
+        SpawnedTask::spawn(async move {
             // Keep the permit until this job exits, even if its caller is cancelled.
             let _permit = permit;
             sort.await
         })
         .join_unwind()
         .await
-        .map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))??;
-        Ok(Self::with_lookahead(stream))
+        .map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))?
     }
 
     /// [`Self::sort_run`] materializes all output and releases each batch's
@@ -1028,17 +1084,35 @@ impl ExternalSorter {
         shared_input: Option<Arc<MemoryReservation>>,
     ) -> Result<impl Future<Output = Result<SendableRecordBatchStream>> + Send + use<>>
     {
+        Self::sort_run_with_resources(
+            batch,
+            reservation,
+            shared_input,
+            self.expr.clone(),
+            self.batch_size,
+            Arc::clone(&self.merge_pool),
+            self.metrics.baseline.elapsed_compute().clone(),
+        )
+    }
+
+    /// Owned resources let a spawned group prepare runs lazily without retaining
+    /// a reference to the sorter, which contains spill writers that are not Sync.
+    fn sort_run_with_resources(
+        batch: RecordBatch,
+        reservation: MemoryReservation,
+        shared_input: Option<Arc<MemoryReservation>>,
+        expressions: LexOrdering,
+        batch_size: usize,
+        merge_pool: Arc<MergeMemoryPool>,
+        elapsed_compute: Time,
+    ) -> Result<impl Future<Output = Result<SendableRecordBatchStream>> + Send + use<>>
+    {
         let reserved_bytes = get_reserved_bytes_for_record_batch(&batch)?;
         match &shared_input {
             None => assert_eq!(reserved_bytes, reservation.size()),
             // `shared_input` covers every buffer of every run's input
             Some(shared) => assert!(reservation.size() + shared.size() >= reserved_bytes),
         }
-
-        let expressions = self.expr.clone();
-        let batch_size = self.batch_size;
-        let merge_pool = Arc::clone(&self.merge_pool);
-        let elapsed_compute = self.metrics.baseline.elapsed_compute().clone();
 
         Ok(async move {
             // Held until `batch` is sorted, when this block ends. The last run to
@@ -1305,8 +1379,9 @@ pub fn sort_batch_chunked(
 /// Support sorting datasets that are larger than the memory allotted
 /// by the memory manager, by spilling to disk.
 ///
-/// On multithreaded Tokio runtimes, large inputs are sorted in batches on
-/// separate tasks before merging. All partitions share a task limit capped by
+/// On multithreaded Tokio runtimes, large inputs are divided into contiguous,
+/// approximately byte-balanced groups of batches. Each task sorts one group and
+/// yields between batches. All partitions share a task limit capped by
 /// both the worker count of the runtime that first performs this sorting and
 /// the estimated available CPU parallelism. Clones and concurrent executions
 /// of the same plan share this limit. The plan returned by
@@ -2566,8 +2641,14 @@ mod tests {
             assert_eq!(elapsed_compute.value(), before);
 
             let stream = if spawned {
-                ExternalSorter::prepare_sort_run(sort, Arc::new(Semaphore::new(1)))
-                    .await?
+                let sorts = std::iter::once(Ok(sort));
+                ExternalSorter::prepare_sort_run_group(
+                    ExternalSorter::sort_run_group(sorts),
+                    Arc::new(Semaphore::new(1)),
+                )
+                .await?
+                .pop()
+                .unwrap()
             } else {
                 sort.await?
             };
@@ -2586,11 +2667,11 @@ mod tests {
             let started = Arc::clone(&started);
             async move {
                 started.notify_one();
-                futures::future::pending::<Result<SendableRecordBatchStream>>().await
+                futures::future::pending::<Result<Vec<SendableRecordBatchStream>>>().await
             }
         };
         let mut preparation =
-            ExternalSorter::prepare_sort_run(sort, Arc::clone(&permits)).boxed();
+            ExternalSorter::prepare_sort_run_group(sort, Arc::clone(&permits)).boxed();
         assert_is_pending(&mut preparation);
         assert_eq!(Handle::current().metrics().num_alive_tasks(), 0);
         drop(held);
@@ -2609,7 +2690,7 @@ mod tests {
     async fn sort_preparation_propagates_errors_and_releases_permit() {
         let permits = Arc::new(Semaphore::new(1));
         let sort = async { Err(internal_datafusion_err!("sort failed")) };
-        let error = ExternalSorter::prepare_sort_run(sort, Arc::clone(&permits))
+        let error = ExternalSorter::prepare_sort_run_group(sort, Arc::clone(&permits))
             .await
             .err()
             .expect("preparation must propagate the sort error");
@@ -2617,27 +2698,52 @@ mod tests {
         assert_eq!(permits.available_permits(), 1);
     }
 
+    #[test]
+    fn sort_run_groups_balance_bytes_and_bound_jobs() {
+        assert!(ExternalSorter::sort_run_group_lengths(&[], 4).is_empty());
+        assert_eq!(
+            ExternalSorter::sort_run_group_lengths(&[4, 8], 4),
+            vec![1, 1]
+        );
+        assert_eq!(
+            ExternalSorter::sort_run_group_lengths(&[10; 8], 3),
+            vec![3, 3, 2]
+        );
+        assert_eq!(
+            ExternalSorter::sort_run_group_lengths(&[8, 1, 1, 1, 1], 3),
+            vec![1, 2, 2]
+        );
+        assert_eq!(
+            ExternalSorter::sort_run_group_lengths(&[1, 2, 3], 1),
+            vec![3]
+        );
+    }
+
     #[tokio::test]
-    async fn sort_preparation_restores_run_order() -> Result<()> {
+    async fn sort_run_group_yields_after_every_run_and_preserves_order() -> Result<()> {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
         let runs = [
             record_batch!(("a", Int32, [1]), ("payload", Utf8, ["first"]))?,
             record_batch!(("a", Int32, [1]), ("payload", Utf8, ["second"]))?,
+            record_batch!(("a", Int32, [1]), ("payload", Utf8, ["third"]))?,
         ];
-        // Completed runs arrive in reverse order; the merge needs their input order.
-        let jobs = runs
-            .iter()
-            .cloned()
-            .enumerate()
-            .rev()
-            .map(|(index, batch)| {
+        let completed = Arc::new(AtomicUsize::new(0));
+        let sorts = runs.iter().cloned().map(|batch| {
+            let completed = Arc::clone(&completed);
+            Ok(async move {
+                completed.fetch_add(1, Ordering::Relaxed);
                 let stream = TestStream::new(vec![batch]);
-                Ok((index, Box::pin(stream) as SendableRecordBatchStream))
-            });
-        let streams = ExternalSorter::collect_prepared_runs(
-            runs.len(),
-            futures::stream::iter(jobs),
-        )
-        .await?;
+                Ok(Box::pin(stream) as SendableRecordBatchStream)
+            })
+        });
+        let mut group = ExternalSorter::sort_run_group(sorts).boxed();
+        // Even ready sorts must return control after each run, including the last.
+        for count in 1..=runs.len() {
+            assert_is_pending(&mut group);
+            assert_eq!(completed.load(Ordering::Relaxed), count);
+        }
+        let streams = group.await?;
         assert_eq!(streams.len(), runs.len());
         for (stream, expected) in streams.into_iter().zip(runs) {
             assert_eq!(stream.try_collect::<Vec<_>>().await?, vec![expected]);
