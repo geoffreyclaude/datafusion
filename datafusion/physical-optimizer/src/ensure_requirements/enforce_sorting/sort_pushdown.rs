@@ -25,7 +25,7 @@ use crate::utils::{
 };
 
 use arrow::datatypes::SchemaRef;
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{HashSet, JoinSide, Result, internal_err};
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::expressions::Column;
@@ -136,8 +136,11 @@ pub fn assign_initial_requirements(sort_push_down: &mut SortPushDown) {
 
 /// Tries to push down the sort requirements as far as possible, if decides a `SortExec` is unnecessary removes it.
 pub fn pushdown_sorts(sort_push_down: SortPushDown) -> Result<SortPushDown> {
+    let allow_custom_pushdown = !sort_push_down
+        .plan
+        .exists(|plan| Ok(plan.fetch().is_some()))?;
     sort_push_down
-        .transform_down(pushdown_sorts_helper)
+        .transform_down(|node| pushdown_sorts_helper(node, allow_custom_pushdown))
         .map(|transformed| transformed.data)
 }
 
@@ -237,6 +240,7 @@ fn stronger_distribution(a: &Distribution, b: &Distribution) -> Distribution {
 
 fn pushdown_sorts_helper(
     mut sort_push_down: SortPushDown,
+    allow_custom_pushdown: bool,
 ) -> Result<Transformed<SortPushDown>> {
     let plan = sort_push_down.plan;
     let parent_fetch = sort_push_down.data.fetch;
@@ -262,7 +266,7 @@ fn pushdown_sorts_helper(
                 Some(OrderingRequirements::from(sort_ordering));
             // Recursive call to helper, so it doesn't transform_down and miss
             // the new node (previous child of sort):
-            return pushdown_sorts_helper(sort_push_down);
+            return pushdown_sorts_helper(sort_push_down, allow_custom_pushdown);
         }
         sort_push_down.plan = plan;
         // No ordering is being pushed; use each child's own distribution requirement
@@ -338,7 +342,7 @@ fn pushdown_sorts_helper(
             };
             // Recursive call to helper, so it doesn't transform_down and miss
             // the new node (previous child of sort):
-            return pushdown_sorts_helper(sort_push_down);
+            return pushdown_sorts_helper(sort_push_down, allow_custom_pushdown);
         }
     }
 
@@ -386,6 +390,51 @@ fn pushdown_sorts_helper(
                     .unwrap_or(&Distribution::UnspecifiedDistribution),
             );
         }
+    } else if allow_custom_pushdown
+        && let Some(adjusted) =
+            custom_sort_requirements(&sort_push_down.plan, &parent_requirement)?
+    {
+        // Sorting individual inputs does not imply that a custom node combines
+        // their partitions. Keep the parent's global merge above the node.
+        let distributions = sort_push_down
+            .plan
+            .input_distribution_requirements()
+            .into_per_child();
+        for (index, (child, ordering)) in
+            sort_push_down.children.iter_mut().zip(adjusted).enumerate()
+        {
+            child.data.ordering_requirement = ordering;
+            child.data.distribution_requirement = distributions
+                .get(index)
+                .cloned()
+                .unwrap_or(Distribution::UnspecifiedDistribution);
+        }
+        sort_push_down.data.ordering_requirement = None;
+        sort_push_down = sort_push_down
+            .map_children(|child| {
+                child.transform_down(|node| {
+                    pushdown_sorts_helper(node, allow_custom_pushdown)
+                })
+            })?
+            .data;
+        if matches!(parent_distribution, Distribution::SinglePartition)
+            && sort_push_down.plan.output_partitioning().partition_count() > 1
+        {
+            let merge = SortPreservingMergeExec::new(
+                parent_requirement.into_single().into(),
+                Arc::clone(&sort_push_down.plan),
+            );
+            sort_push_down = PlanContext::new(
+                Arc::new(merge),
+                ParentRequirements::default(),
+                vec![sort_push_down],
+            );
+        }
+        return Ok(Transformed::new(
+            sort_push_down,
+            true,
+            TreeNodeRecursion::Jump,
+        ));
     } else if let Some(adjusted) = pushdown_requirement_to_children(
         &sort_push_down.plan,
         parent_requirement.clone(),
@@ -639,9 +688,100 @@ fn pushdown_requirement_to_children(
         Ok(Some(child_requirements))
     } else {
         // Preserving row positions does not identify the input expressions needed
-        // to order transformed output values. Custom nodes opt in through
-        // ExecutionPlan::try_pushdown_sort, handled by the PushdownSort rule.
+        // to order transformed output values. Custom placement is handled through
+        // ExecutionPlan::pushdown_sort_requirements before these native handlers.
+        // The later PushdownSort rule handles ExecutionPlan::try_pushdown_sort.
         Ok(None)
+    }
+}
+
+/// Preserve a custom node's mandatory input ordering after mapping the output request.
+fn custom_sort_requirements(
+    plan: &Arc<dyn ExecutionPlan>,
+    output: &OrderingRequirements,
+) -> Result<Option<Vec<Option<OrderingRequirements>>>> {
+    // A global merge needs concrete options, even when either direction would
+    // satisfy the parent. Ask the hook to guarantee the same concrete ordering.
+    let ordering = LexOrdering::from(output.first().clone());
+    let preferred = single_requirement(
+        ordering.into(),
+        matches!(output, OrderingRequirements::Soft(_)),
+    );
+    let Some(mapped) = plan.pushdown_sort_requirements(&preferred)? else {
+        return Ok(None);
+    };
+    let children = plan.children();
+    let required = plan.required_input_ordering();
+    if mapped.len() != children.len() || required.len() != children.len() {
+        return internal_err!(
+            "{} returned {} sort mappings and {} input requirements for {} children",
+            plan.name(),
+            mapped.len(),
+            required.len(),
+            children.len()
+        );
+    }
+    if !mapped.iter().any(Option::is_some) {
+        return Ok(None);
+    }
+    let mut adjusted = Vec::with_capacity(children.len());
+    for ((mapped, required), child) in mapped.into_iter().zip(required).zip(children) {
+        let Some(mapped) = mapped else {
+            adjusted.push(required);
+            continue;
+        };
+        let eqp = child.equivalence_properties();
+        let ordering = if let Some(required) = &required {
+            let Some(ordering) = merge_input_ordering(&mapped, required, eqp) else {
+                return Ok(None);
+            };
+            ordering
+        } else {
+            mapped.first().clone()
+        };
+        if child.boundedness().is_unbounded()
+            && !eqp.ordering_satisfy_requirement(ordering.clone())?
+        {
+            return Ok(None);
+        }
+        let soft = matches!(output, OrderingRequirements::Soft(_))
+            && matches!(mapped, OrderingRequirements::Soft(_))
+            && required
+                .as_ref()
+                .is_none_or(|required| matches!(required, OrderingRequirements::Soft(_)));
+        adjusted.push(Some(single_requirement(ordering, soft)));
+    }
+    Ok(Some(adjusted))
+}
+
+fn single_requirement(ordering: LexRequirement, soft: bool) -> OrderingRequirements {
+    if soft {
+        OrderingRequirements::new_soft(ordering)
+    } else {
+        OrderingRequirements::new(ordering)
+    }
+}
+
+/// Retain the finer compatible preferred input ordering.
+fn merge_input_ordering(
+    mapped: &OrderingRequirements,
+    required: &OrderingRequirements,
+    eqp: &EquivalenceProperties,
+) -> Option<LexRequirement> {
+    let normalized_mapped = eqp.normalize_sort_requirements(mapped.first().clone());
+    let normalized_required = eqp.normalize_sort_requirements(required.first().clone());
+    match (normalized_mapped, normalized_required) {
+        (_, None) => Some(mapped.first().clone()),
+        (None, Some(_)) => Some(required.first().clone()),
+        (Some(mapped_keys), Some(required_keys)) => {
+            if eqp.requirements_compatible(mapped_keys.clone(), required_keys.clone()) {
+                Some(mapped.first().clone())
+            } else if eqp.requirements_compatible(required_keys, mapped_keys) {
+                Some(required.first().clone())
+            } else {
+                None
+            }
+        }
     }
 }
 
@@ -1235,6 +1375,36 @@ mod tests {
 
     fn lex(reqs: impl IntoIterator<Item = PhysicalSortRequirement>) -> LexRequirement {
         LexRequirement::new(reqs).unwrap()
+    }
+
+    #[test]
+    fn mapped_ordering_keeps_compatible_input_requirements() {
+        let schema = child_schema();
+        let eqp = EquivalenceProperties::new(Arc::clone(&schema));
+        let a = lex([req("a", &schema, ASC)]);
+        let ab = lex([req("a", &schema, ASC), req("b", &schema, ASC)]);
+        let ac = lex([req("a", &schema, ASC), req("c", &schema, ASC)]);
+        let unspecified_a = lex([PhysicalSortRequirement::new(
+            col("a", &schema).unwrap(),
+            None,
+        )]);
+        let descending_a = lex([req("a", &schema, DESC)]);
+        let cases = [
+            (a.clone(), ab.clone(), Some(ab.clone())),
+            (ab.clone(), a, Some(ab.clone())),
+            (ac, ab, None),
+            (unspecified_a, descending_a.clone(), Some(descending_a)),
+        ];
+        for (mapped, required, expected) in cases {
+            assert_eq!(
+                merge_input_ordering(
+                    &OrderingRequirements::new(mapped),
+                    &OrderingRequirements::new(required),
+                    &eqp,
+                ),
+                expected,
+            );
+        }
     }
 
     #[test]

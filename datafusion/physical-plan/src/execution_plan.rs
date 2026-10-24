@@ -234,7 +234,8 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     /// such as automatically repartitioning correctly.
     ///
     /// This describes row sequence, not how input expressions map to outputs.
-    /// Custom nodes that support sort pushdown should implement
+    /// Custom nodes can declare sort placement through
+    /// [`Self::pushdown_sort_requirements`] or implement
     /// [`Self::try_pushdown_sort`]; returning `true` here alone does not opt in.
     ///
     /// The default implementation returns `false`
@@ -975,6 +976,40 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
         None
     }
 
+    /// Describe which input orderings can safely provide a requested output ordering.
+    ///
+    /// The optimizer uses this declaration to place and combine sorts below a
+    /// custom node, including when its children do not implement
+    /// [`Self::try_pushdown_sort`]. Return one entry per child, expressed in that
+    /// child's schema. A `None` entry leaves that child's ordering requirements
+    /// unchanged. Return `Ok(None)` to decline the request.
+    ///
+    /// Decide for the requested expressions: forwarding one output column does
+    /// not imply that sorting by another column can pass through. For every
+    /// combination of returned input orderings, the rebuilt node must provide
+    /// the requested ordering within each output partition. Sorting the inputs
+    /// must preserve the node's complete result rows and values, apart from
+    /// their order. Mapping sort keys alone is insufficient when other results
+    /// depend on the input sequence.
+    /// For example, a node forwarding `x AS a` can map ordering by `a` to `x`
+    /// while declining an ordering by a computed output column `b`.
+    ///
+    /// Rebuilding with sorted inputs must report their resulting ordering and
+    /// partitioning accurately, and sorting must preserve the result rows in
+    /// each output partition. The optimizer retains compatible mandatory input
+    /// requirements and declines conflicting requirements. It currently considers
+    /// the preferred ordering and uses this hook only in plans without any fetch;
+    /// returning a mapping does not grant permission to move a limit.
+    ///
+    /// Unlike [`Self::try_pushdown_sort`], this method does not construct a
+    /// replacement plan or optimize a data source. The default declines pushdown.
+    fn pushdown_sort_requirements(
+        &self,
+        _order: &OrderingRequirements,
+    ) -> Result<Option<Vec<Option<OrderingRequirements>>>> {
+        Ok(None)
+    }
+
     /// Try to push down sort ordering requirements to this node.
     ///
     /// This method is called during sort pushdown optimization to determine if this
@@ -987,8 +1022,8 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     /// - Return [`SortOrderPushdownResult::Unsupported`] if the node cannot optimize
     ///   for the ordering
     ///
-    /// Custom nodes opt into sort pushdown by implementing this method. Requested
-    /// expressions refer to this node's output schema; map them to input
+    /// Custom nodes can optimize a requested ordering by implementing this method.
+    /// Expressions refer to this node's output schema; map them to input
     /// expressions before delegating to a child. Decline pushdown when a correct
     /// mapping is unavailable.
     ///
@@ -997,6 +1032,8 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     /// the node. Delegation relies on the child supporting this method. If the
     /// child returns [`SortOrderPushdownResult::Unsupported`], delegation alone
     /// does not insert or move sorts to satisfy the requested ordering.
+    /// For optimizer-managed sort placement, implement
+    /// [`Self::pushdown_sort_requirements`] instead.
     ///
     /// Default implementation returns `Unsupported`.
     fn try_pushdown_sort(

@@ -440,6 +440,7 @@ pub struct RequirementsTestExec {
     required_input_ordering: Option<LexOrdering>,
     required_input_distribution: Distribution,
     maintains_input_order: bool,
+    sort_requirement_pushdown: bool,
     input: Arc<dyn ExecutionPlan>,
 }
 
@@ -449,6 +450,7 @@ impl RequirementsTestExec {
             required_input_ordering: None,
             required_input_distribution: Distribution::UnspecifiedDistribution,
             maintains_input_order: true,
+            sort_requirement_pushdown: false,
             input,
         }
     }
@@ -474,6 +476,11 @@ impl RequirementsTestExec {
     /// set the maintains_input_order flag
     pub fn with_maintains_input_order(mut self, maintains_input_order: bool) -> Self {
         self.maintains_input_order = maintains_input_order;
+        self
+    }
+
+    pub fn with_sort_requirement_pushdown(mut self) -> Self {
+        self.sort_requirement_pushdown = true;
         self
     }
 
@@ -522,6 +529,15 @@ impl ExecutionPlan for RequirementsTestExec {
         vec![self.maintains_input_order]
     }
 
+    fn pushdown_sort_requirements(
+        &self,
+        requirement: &OrderingRequirements,
+    ) -> Result<Option<Vec<Option<OrderingRequirements>>>> {
+        Ok(self
+            .sort_requirement_pushdown
+            .then(|| vec![Some(requirement.clone())]))
+    }
+
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
     }
@@ -532,11 +548,12 @@ impl ExecutionPlan for RequirementsTestExec {
         _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         assert_eq!(children.len(), 1);
-        Ok(RequirementsTestExec::new(Arc::clone(&children[0]))
+        let mut replacement = RequirementsTestExec::new(Arc::clone(&children[0]))
             .with_required_input_ordering(self.required_input_ordering.clone())
             .with_required_input_distribution(self.required_input_distribution.clone())
-            .with_maintains_input_order(self.maintains_input_order)
-            .into_arc())
+            .with_maintains_input_order(self.maintains_input_order);
+        replacement.sort_requirement_pushdown = self.sort_requirement_pushdown;
+        Ok(replacement.into_arc())
     }
 
     fn with_new_children(
@@ -551,10 +568,10 @@ impl ExecutionPlan for RequirementsTestExec {
 
     fn execute(
         &self,
-        _partition: usize,
-        _context: Arc<TaskContext>,
+        partition: usize,
+        context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        unimplemented!("Test exec does not support execution")
+        self.input.execute(partition, context)
     }
 
     fn apply_expressions(

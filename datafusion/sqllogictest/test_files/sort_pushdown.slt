@@ -40,6 +40,71 @@ physical_plan
 03)----CooperativeExec
 04)------DataSourceExec: partitions=1, partition_sizes=[1]
 
+# The same custom node may propagate ordering through a forwarded column while
+# declining a computed column. The forwarded column is renamed and reordered.
+query II
+SELECT neg_b, key FROM custom_mixed_projection ORDER BY key;
+----
+-6 1
+-4 2
+-5 3
+-7 NULL
+
+query TT
+EXPLAIN SELECT neg_b, key FROM custom_mixed_projection ORDER BY key;
+----
+physical_plan
+01)CustomProjectionExec: expr=[(- b@1) as neg_b, a@0 as key]
+02)--SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
+03)----CooperativeExec
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Direction and null placement must survive the column mapping too.
+query II
+SELECT neg_b, key FROM custom_mixed_projection ORDER BY key DESC NULLS FIRST;
+----
+-7 NULL
+-5 3
+-4 2
+-6 1
+
+query TT
+EXPLAIN SELECT neg_b, key FROM custom_mixed_projection ORDER BY key DESC NULLS FIRST;
+----
+physical_plan
+01)CustomProjectionExec: expr=[(- b@1) as neg_b, a@0 as key]
+02)--SortExec: expr=[a@0 DESC], preserve_partitioning=[false]
+03)----CooperativeExec
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Sorting computed values remains above the wrapper.
+query II
+SELECT neg_b, key FROM custom_mixed_projection ORDER BY neg_b;
+----
+-7 NULL
+-6 1
+-5 3
+-4 2
+
+query TT
+EXPLAIN SELECT neg_b, key FROM custom_mixed_projection ORDER BY neg_b;
+----
+physical_plan
+01)SortExec: expr=[neg_b@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--CustomProjectionExec: expr=[(- b@1) as neg_b, a@0 as key]
+03)----CooperativeExec
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Supporting the first key does not permit pushing an unsupported suffix.
+query TT
+EXPLAIN SELECT neg_b, key FROM custom_mixed_projection ORDER BY key, neg_b;
+----
+physical_plan
+01)SortExec: expr=[key@1 ASC NULLS LAST, neg_b@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--CustomProjectionExec: expr=[(- b@1) as neg_b, a@0 as key]
+03)----CooperativeExec
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
 statement ok
 SET datafusion.explain.physical_plan_only = false;
 
