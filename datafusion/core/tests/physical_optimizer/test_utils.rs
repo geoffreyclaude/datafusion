@@ -56,7 +56,9 @@ use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
-use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion_physical_plan::execution_plan::{
+    Boundedness, CardinalityEffect, EmissionType,
+};
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::utils::{JoinFilter, JoinOn};
 use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode, SortMergeJoinExec};
@@ -441,6 +443,7 @@ pub struct RequirementsTestExec {
     required_input_distribution: Distribution,
     maintains_input_order: bool,
     sort_requirement_pushdown: bool,
+    limit_pushdown: bool,
     input: Arc<dyn ExecutionPlan>,
 }
 
@@ -451,6 +454,7 @@ impl RequirementsTestExec {
             required_input_distribution: Distribution::UnspecifiedDistribution,
             maintains_input_order: true,
             sort_requirement_pushdown: false,
+            limit_pushdown: false,
             input,
         }
     }
@@ -481,6 +485,11 @@ impl RequirementsTestExec {
 
     pub fn with_sort_requirement_pushdown(mut self) -> Self {
         self.sort_requirement_pushdown = true;
+        self
+    }
+
+    pub fn with_limit_pushdown(mut self) -> Self {
+        self.limit_pushdown = true;
         self
     }
 
@@ -538,6 +547,14 @@ impl ExecutionPlan for RequirementsTestExec {
             .then(|| vec![Some(requirement.clone())]))
     }
 
+    fn supports_limit_pushdown(&self) -> bool {
+        self.limit_pushdown
+    }
+
+    fn cardinality_effect(&self) -> CardinalityEffect {
+        CardinalityEffect::Equal
+    }
+
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
     }
@@ -553,6 +570,7 @@ impl ExecutionPlan for RequirementsTestExec {
             .with_required_input_distribution(self.required_input_distribution.clone())
             .with_maintains_input_order(self.maintains_input_order);
         replacement.sort_requirement_pushdown = self.sort_requirement_pushdown;
+        replacement.limit_pushdown = self.limit_pushdown;
         Ok(replacement.into_arc())
     }
 

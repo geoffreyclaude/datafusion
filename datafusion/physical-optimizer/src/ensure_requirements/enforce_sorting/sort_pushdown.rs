@@ -47,6 +47,7 @@ use datafusion_physical_plan::joins::utils::{
 use datafusion_physical_plan::joins::{HashJoinExec, SortMergeJoinExec};
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
+use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::scalar_subquery::ScalarSubqueryExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
@@ -136,11 +137,14 @@ pub fn assign_initial_requirements(sort_push_down: &mut SortPushDown) {
 
 /// Tries to push down the sort requirements as far as possible, if decides a `SortExec` is unnecessary removes it.
 pub fn pushdown_sorts(sort_push_down: SortPushDown) -> Result<SortPushDown> {
-    let allow_custom_pushdown = !sort_push_down
-        .plan
-        .exists(|plan| Ok(plan.fetch().is_some()))?;
+    let context = SortPushdownContext {
+        has_fetch: sort_push_down
+            .plan
+            .exists(|plan| Ok(plan.fetch().is_some()))?,
+        fetch_free_subtree: false,
+    };
     sort_push_down
-        .transform_down(|node| pushdown_sorts_helper(node, allow_custom_pushdown))
+        .transform_down(|node| pushdown_sorts_helper(node, context))
         .map(|transformed| transformed.data)
 }
 
@@ -238,9 +242,17 @@ fn stronger_distribution(a: &Distribution, b: &Distribution) -> Distribution {
     }
 }
 
+#[derive(Clone, Copy)]
+struct SortPushdownContext {
+    has_fetch: bool,
+    // Checked for existing row-selection boundaries; in a fetched context,
+    // also checked for repartitions that could move the new TopK on a later pass.
+    fetch_free_subtree: bool,
+}
+
 fn pushdown_sorts_helper(
     mut sort_push_down: SortPushDown,
-    allow_custom_pushdown: bool,
+    context: SortPushdownContext,
 ) -> Result<Transformed<SortPushDown>> {
     let plan = sort_push_down.plan;
     let parent_fetch = sort_push_down.data.fetch;
@@ -266,7 +278,7 @@ fn pushdown_sorts_helper(
                 Some(OrderingRequirements::from(sort_ordering));
             // Recursive call to helper, so it doesn't transform_down and miss
             // the new node (previous child of sort):
-            return pushdown_sorts_helper(sort_push_down, allow_custom_pushdown);
+            return pushdown_sorts_helper(sort_push_down, context);
         }
         sort_push_down.plan = plan;
         // No ordering is being pushed; use each child's own distribution requirement
@@ -342,7 +354,7 @@ fn pushdown_sorts_helper(
             };
             // Recursive call to helper, so it doesn't transform_down and miss
             // the new node (previous child of sort):
-            return pushdown_sorts_helper(sort_push_down, allow_custom_pushdown);
+            return pushdown_sorts_helper(sort_push_down, context);
         }
     }
 
@@ -390,10 +402,12 @@ fn pushdown_sorts_helper(
                     .unwrap_or(&Distribution::UnspecifiedDistribution),
             );
         }
-    } else if allow_custom_pushdown
-        && let Some(adjusted) =
-            custom_sort_requirements(&sort_push_down.plan, &parent_requirement)?
-    {
+    } else if let Some(adjusted) = custom_sort_requirements(
+        &sort_push_down.plan,
+        &parent_requirement,
+        parent_fetch,
+        context,
+    )? {
         // Sorting individual inputs does not imply that a custom node combines
         // their partitions. Keep the parent's global merge above the node.
         let distributions = sort_push_down
@@ -404,20 +418,31 @@ fn pushdown_sorts_helper(
             sort_push_down.children.iter_mut().zip(adjusted).enumerate()
         {
             child.data.ordering_requirement = ordering;
+            child.data.fetch = min_fetch(parent_fetch, child.data.fetch);
             child.data.distribution_requirement = distributions
                 .get(index)
                 .cloned()
                 .unwrap_or(Distribution::UnspecifiedDistribution);
         }
         sort_push_down.data.ordering_requirement = None;
+        sort_push_down.data.fetch = None;
+        let child_context = SortPushdownContext {
+            fetch_free_subtree: true,
+            ..context
+        };
         sort_push_down = sort_push_down
             .map_children(|child| {
-                child.transform_down(|node| {
-                    pushdown_sorts_helper(node, allow_custom_pushdown)
-                })
+                child.transform_down(|node| pushdown_sorts_helper(node, child_context))
             })?
             .data;
-        if matches!(parent_distribution, Distribution::SinglePartition)
+        if let Some(fetch) = parent_fetch {
+            sort_push_down = preserve_fetch_above_ordered_plan(
+                sort_push_down,
+                parent_requirement.into_single().into(),
+                fetch,
+                &parent_distribution,
+            );
+        } else if matches!(parent_distribution, Distribution::SinglePartition)
             && sort_push_down.plan.output_partitioning().partition_count() > 1
         {
             let merge = SortPreservingMergeExec::new(
@@ -699,6 +724,8 @@ fn pushdown_requirement_to_children(
 fn custom_sort_requirements(
     plan: &Arc<dyn ExecutionPlan>,
     output: &OrderingRequirements,
+    parent_fetch: Option<usize>,
+    context: SortPushdownContext,
 ) -> Result<Option<Vec<Option<OrderingRequirements>>>> {
     // A global merge needs concrete options, even when either direction would
     // satisfy the parent. Ask the hook to guarantee the same concrete ordering.
@@ -722,6 +749,32 @@ fn custom_sort_requirements(
         );
     }
     if !mapped.iter().any(Option::is_some) {
+        return Ok(None);
+    }
+    // A query limit may become a TopK only after this rule runs. Require limit
+    // permission already, so that later pushdown keeps the sort bounded.
+    let limited = context.has_fetch || parent_fetch.is_some();
+    if limited
+        && (children.len() != 1
+            || !can_push_fetch_through(plan)
+            || children[0].output_partitioning().partition_count()
+                != plan.output_partitioning().partition_count())
+    {
+        return Ok(None);
+    }
+    // Keep existing selections intact. A new TopK above repartition can move
+    // below it on a later requirements pass, changing a local bound's scope.
+    // Accepted custom subtrees carry this check down to avoid repeated scans.
+    if plan.fetch().is_some()
+        || (!context.fetch_free_subtree
+            && plan.exists(|plan| {
+                Ok(plan.fetch().is_some()
+                    || (limited && plan.is::<RepartitionExec>())
+                    || plan
+                        .downcast_ref::<GlobalLimitExec>()
+                        .is_some_and(|limit| limit.skip() > 0))
+            })?)
+    {
         return Ok(None);
     }
     let mut adjusted = Vec::with_capacity(children.len());

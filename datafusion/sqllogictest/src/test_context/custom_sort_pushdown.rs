@@ -32,6 +32,7 @@ use datafusion::physical_expr::projection::ProjectionExprs;
 use datafusion::physical_expr_common::sort_expr::{
     LexRequirement, OrderingRequirements, PhysicalSortRequirement,
 };
+use datafusion::physical_plan::execution_plan::CardinalityEffect;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::test::TestMemoryExec;
 use datafusion::physical_plan::{
@@ -140,6 +141,14 @@ impl ExecutionPlan for CustomProjection {
     // Preserving row positions alone does not identify safe sort expressions.
     fn maintains_input_order(&self) -> Vec<bool> {
         self.projection.maintains_input_order()
+    }
+
+    fn supports_limit_pushdown(&self) -> bool {
+        self.projection.supports_limit_pushdown()
+    }
+
+    fn cardinality_effect(&self) -> CardinalityEffect {
+        self.projection.cardinality_effect()
     }
 
     fn pushdown_sort_requirements(

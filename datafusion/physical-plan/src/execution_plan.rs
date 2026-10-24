@@ -998,8 +998,18 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     /// partitioning accurately, and sorting must preserve the result rows in
     /// each output partition. The optimizer retains compatible mandatory input
     /// requirements and declines conflicting requirements. It currently considers
-    /// the preferred ordering and uses this hook only in plans without any fetch;
-    /// returning a mapping does not grant permission to move a limit.
+    /// the preferred ordering and retains existing fetch and offset boundaries.
+    ///
+    /// Accepting an ordering does not grant permission to move a row limit. For a
+    /// single-input node, moving a TopK fetch additionally requires
+    /// [`Self::supports_limit_pushdown`] and [`CardinalityEffect::Equal`]. The
+    /// node must preserve the input partition count for every valid sorted
+    /// replacement input. Truncating each input partition to `k` rows must produce
+    /// exactly the same first `k` rows and values in each output partition, or
+    /// all its rows if it has fewer than `k`. Equal cardinality alone is
+    /// insufficient. In plans containing a fetch, the optimizer currently uses
+    /// this hook only for nodes satisfying these additional conditions.
+    /// Fetched propagation also stops at existing repartitions in the input subtree.
     ///
     /// Unlike [`Self::try_pushdown_sort`], this method does not construct a
     /// replacement plan or optimize a data source. The default declines pushdown.
