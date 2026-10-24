@@ -25,18 +25,21 @@ use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::Result;
 use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::logical_expr::{Expr, TableType};
-use datafusion::physical_expr::PhysicalExpr;
-use datafusion::physical_expr::expressions::{col, negative};
+use datafusion::logical_expr::{Expr, Operator, TableType};
+use datafusion::physical_expr::expressions::{binary, col, lit, negative};
 use datafusion::physical_expr::projection::ProjectionExprs;
+use datafusion::physical_expr::{PhysicalExpr, PhysicalSortExpr};
+use datafusion::physical_plan::filter::FilterExec;
+use datafusion::physical_plan::limit::LocalLimitExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::test::TestMemoryExec;
 use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
+    ReplaceChildrenOptions,
 };
 use datafusion::prelude::SessionContext;
 
-/// Register a fixed custom operator that negates its input column.
+/// Register custom plans whose native implementations are hidden from the optimizer.
 pub(super) fn register_custom_sort_pushdown(ctx: &SessionContext) -> Result<()> {
     let batch = record_batch!(("a", Int32, [2, 1, 3]))?;
     let schema = batch.schema();
@@ -47,18 +50,54 @@ pub(super) fn register_custom_sort_pushdown(ctx: &SessionContext) -> Result<()> 
     )?;
     ctx.register_table(
         "custom_negated_projection",
-        Arc::new(CustomProjection(projection)),
+        Arc::new(CustomExec(Arc::new(projection))),
+    )?;
+
+    let batch = record_batch!(("a", Int32, [2, 1, 3]), ("b", Int32, [10, 30, 20]))?;
+    let schema = batch.schema();
+    let input = TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)?;
+    let projection = ProjectionExec::try_new(
+        [
+            (col("b", &schema)?, "a".to_string()),
+            (col("a", &schema)?, "b".to_string()),
+        ],
+        input,
+    )?;
+    ctx.register_table(
+        "custom_reordered_projection",
+        Arc::new(CustomExec(Arc::new(projection))),
+    )?;
+
+    let batch = record_batch!(("t", Int32, [1, 2, 3]), ("x", Int32, [0, 2, 4]))?;
+    let schema = batch.schema();
+    let input = TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)?;
+    let predicate = binary(col("x", &schema)?, Operator::NotEq, lit(0i32), &schema)?;
+    ctx.register_table(
+        "custom_filtered_input",
+        Arc::new(CustomExec(Arc::new(FilterExec::try_new(predicate, input)?))),
+    )?;
+
+    let batch = record_batch!(("a", Int32, [1, 2, 3]), ("b", Int32, [30, 20, 10]))?;
+    let schema = batch.schema();
+    let ordering = [PhysicalSortExpr::new_default(col("a", &schema)?)].into();
+    let input = Arc::new(
+        TestMemoryExec::try_new(&[vec![batch]], Arc::clone(&schema), None)?
+            .try_with_sort_information(vec![ordering])?,
+    );
+    ctx.register_table(
+        "custom_limited_input",
+        Arc::new(CustomExec(Arc::new(LocalLimitExec::new(input, 2)))),
     )?;
     Ok(())
 }
 
-/// Negates values while preserving row positions. Keeping a distinct plan type
-/// exercises the generic custom-plan sort pushdown path.
+/// Exposes a native plan's children and properties under a distinct plan type,
+/// exercising the generic custom-plan sort pushdown path.
 #[derive(Debug, Clone)]
-struct CustomProjection(ProjectionExec);
+struct CustomExec(Arc<dyn ExecutionPlan>);
 
 #[async_trait]
-impl TableProvider for CustomProjection {
+impl TableProvider for CustomExec {
     fn schema(&self) -> SchemaRef {
         self.0.schema()
     }
@@ -87,16 +126,16 @@ impl TableProvider for CustomProjection {
     }
 }
 
-impl DisplayAs for CustomProjection {
+impl DisplayAs for CustomExec {
     fn fmt_as(&self, display_type: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
         write!(f, "Custom")?;
         self.0.fmt_as(display_type, f)
     }
 }
 
-impl ExecutionPlan for CustomProjection {
+impl ExecutionPlan for CustomExec {
     fn name(&self) -> &str {
-        "CustomProjectionExec"
+        "CustomExec"
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {
@@ -107,18 +146,21 @@ impl ExecutionPlan for CustomProjection {
         self.0.children()
     }
 
-    // Row positions are preserved; projected values have the opposite ordering.
     fn maintains_input_order(&self) -> Vec<bool> {
         self.0.maintains_input_order()
+    }
+
+    fn fetch(&self) -> Option<usize> {
+        self.0.fetch()
     }
 
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(Self(ProjectionExec::try_new(
-            self.0.expr().to_vec(),
-            Arc::clone(&children[0]),
+        Ok(Arc::new(Self(Arc::clone(&self.0).replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
         )?)))
     }
 
